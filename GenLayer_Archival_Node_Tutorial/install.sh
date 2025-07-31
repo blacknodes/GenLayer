@@ -12,9 +12,6 @@ NC='\033[0m' # No Color
 # Installation directory
 INSTALL_DIR="$HOME/genlayer-archive-node"
 
-# Docker command - will be set based on what's available
-DOCKER_COMPOSE_CMD=""
-
 # Function to display the animated banner
 display_banner() {
     # Install dependencies for animation if not present
@@ -69,35 +66,6 @@ is_node_installed() {
     fi
 }
 
-# Detect Docker Compose command
-detect_docker_compose() {
-    # Try docker compose (new style)
-    if docker compose version &>/dev/null; then
-        DOCKER_COMPOSE_CMD="docker compose"
-        print_success "Using docker compose command"
-        return
-    fi
-    
-    # Try docker-compose (old style)
-    if command -v docker-compose &>/dev/null; then
-        DOCKER_COMPOSE_CMD="docker-compose"
-        print_success "Using docker-compose command"
-        return
-    fi
-    
-    # If we get here, we need to install docker-compose
-    print_warn "Docker Compose not found. Installing docker-compose..."
-    sudo apt-get install -y docker-compose > /dev/null 2>&1
-    
-    if command -v docker-compose &>/dev/null; then
-        DOCKER_COMPOSE_CMD="docker-compose"
-        print_success "Installed and using docker-compose command"
-    else
-        print_error "Failed to install docker-compose. Please install it manually."
-        exit 1
-    fi
-}
-
 # Check and install dependencies
 check_dependencies() {
     print_info "Checking and installing dependencies..."
@@ -134,6 +102,12 @@ check_dependencies() {
         PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL docker.io"
     fi
     
+    # Install docker-compose if not present
+    if ! command -v docker-compose &> /dev/null; then
+        print_info "Docker Compose not found. Installing docker-compose..."
+        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL docker-compose"
+    fi
+    
     # Install packages if needed
     if [ ! -z "$PACKAGES_TO_INSTALL" ]; then
         print_info "Installing required packages: $PACKAGES_TO_INSTALL"
@@ -153,15 +127,18 @@ check_dependencies() {
         print_warn "You may need to log out and back in for group changes to take effect"
     fi
     
-    # Detect Docker Compose command
-    detect_docker_compose
-    
     print_success "All dependencies installed and configured!"
 }
 
 # Stop existing services
 stop_services() {
     print_info "Stopping any existing GenLayer services..."
+    
+    # Stop systemd service if it exists
+    if systemctl is-active --quiet genlayer-archive; then
+        sudo systemctl stop genlayer-archive
+        print_success "Stopped genlayer-archive service"
+    fi
     
     # Stop any running GenLayer nodes
     pkill -f genlayernode 2>/dev/null || true
@@ -171,7 +148,7 @@ stop_services() {
     if [ -d "$INSTALL_DIR/genlayer-node-linux-amd64" ]; then
         cd "$INSTALL_DIR/genlayer-node-linux-amd64"
         if [ -f "docker-compose.yml" ]; then
-            $DOCKER_COMPOSE_CMD down 2>/dev/null || true
+            docker-compose down 2>/dev/null || true
         fi
         cd - > /dev/null
     fi
@@ -325,14 +302,10 @@ EOF
     cat > docker-compose.yml << 'EOF'
 version: '3.8'
 services:
-  webdriver:
-    image: selenium/standalone-chrome:latest
+  webdriver-container:
+    image: yeagerai/genlayer-genvm-webdriver:0.0.3
     ports:
       - "4444:4444"
-    environment:
-      - SE_NODE_MAX_SESSIONS=5
-      - SE_NODE_SESSION_TIMEOUT=86400
-    shm_size: 2gb
     restart: unless-stopped
 EOF
 
@@ -368,39 +341,47 @@ EOF
     
     # Start WebDriver
     print_info "Starting WebDriver container..."
-    $DOCKER_COMPOSE_CMD up -d
+    docker-compose up -d
     sleep 5
 
-    if docker ps | grep -q selenium; then
+    if docker ps | grep -q genlayer-node-webdriver; then
         print_success "WebDriver started successfully"
     else
         print_error "Failed to start WebDriver. Continuing anyway..."
     fi
 
+    # Create systemd service file
+    print_info "Creating systemd service..."
+    sudo bash -c "cat > /etc/systemd/system/genlayer-archive.service << EOF
+[Unit]
+Description=GenLayer Archive Node
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=$INSTALL_DIR/genlayer-node-linux-amd64
+Environment=\"HEURISTKEY=dummy-key\"
+Environment=\"COMPUT3KEY=dummy-key\"
+Environment=\"IOINTELLIGENCE_API_KEY=dummy-key\"
+
+# First ensure Docker container is running
+ExecStartPre=/usr/bin/docker-compose up -d
+
+# Then start the node
+ExecStart=$INSTALL_DIR/genlayer-node-linux-amd64/bin/genlayernode run -c $INSTALL_DIR/genlayer-node-linux-amd64/configs/node/config.yaml --password \"$NODE_PASSWORD\"
+
+# Restart policy
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target
+EOF"
+
     # Create helper scripts
     print_info "Creating helper scripts..."
-    
-    # Script to start node
-    cat > start-node.sh << EOF
-#!/bin/bash
-cd "$INSTALL_DIR/genlayer-node-linux-amd64"
-
-# Make sure Docker is running
-$DOCKER_COMPOSE_CMD up -d
-
-# Get password
-NODE_PASSWORD=\$(cat .node_password)
-
-# Start the node in a screen session
-echo "Starting GenLayer node in screen session 'genlayer'..."
-echo "To view logs: screen -r genlayer"
-echo "To detach: Press Ctrl+A, then D"
-echo ""
-echo "Starting node..."
-screen -S genlayer -d -m bash -c './bin/genlayernode run -c \$(pwd)/configs/node/config.yaml --password "\$NODE_PASSWORD"'
-echo "Node started!"
-EOF
-    chmod +x start-node.sh
     
     # Script to check status
     cat > check-status.sh << EOF
@@ -409,15 +390,15 @@ cd "$INSTALL_DIR/genlayer-node-linux-amd64"
 
 echo -e "\033[0;32m=== GenLayer Node Status ===\033[0m"
 
-# Check if screen session exists
-if screen -list | grep -q genlayer; then
-    echo -e "Node Screen: \033[0;32mRunning\033[0m"
+# Check if service is running
+if systemctl is-active --quiet genlayer-archive; then
+    echo -e "Service: \033[0;32mRunning\033[0m"
 else
-    echo -e "Node Screen: \033[0;31mNot running\033[0m"
+    echo -e "Service: \033[0;31mNot running\033[0m"
 fi
 
 # Check if Docker container is running
-if docker ps | grep -q selenium; then
+if docker ps | grep -q genlayer-node-webdriver; then
     echo -e "WebDriver: \033[0;32mRunning\033[0m"
 else
     echo -e "WebDriver: \033[0;31mNot running\033[0m"
@@ -453,48 +434,32 @@ EOF
 #!/bin/bash
 cd "$INSTALL_DIR/genlayer-node-linux-amd64"
 
+echo -e "\033[0;32m=== Service Logs ===\033[0m"
+journalctl -u genlayer-archive -n 50 --no-pager
+
 if [ -d "./data/node/logs" ]; then
-  echo -e "\033[0;32m=== Recent Logs ===\033[0m"
+  echo -e "\033[0;32m=== File Logs ===\033[0m"
   ls -1 ./data/node/logs/*.log 2>/dev/null | while read logfile; do
     echo -e "\033[1;33m\$(basename "\$logfile"):\033[0m"
     tail -n 10 "\$logfile"
     echo ""
   done
-else
-  echo -e "\033[0;31m[ERROR]\033[0m No logs directory found"
 fi
 EOF
     chmod +x view-logs.sh
     
-    # Create rc.local for auto-start
-    print_info "Setting up auto-start on boot..."
-    sudo bash -c "cat > /etc/rc.local << EOF
-#!/bin/bash
-cd $INSTALL_DIR/genlayer-node-linux-amd64
-./start-node.sh > /var/log/genlayer-startup.log 2>&1
-exit 0
-EOF"
-    sudo chmod +x /etc/rc.local
+    # Enable and start the service
+    print_info "Enabling and starting systemd service..."
+    sudo systemctl daemon-reload
+    sudo systemctl enable genlayer-archive
+    sudo systemctl start genlayer-archive
+    sleep 5
     
-    # Enable rc-local service if needed
-    if ! systemctl is-enabled rc-local &>/dev/null; then
-        sudo bash -c "cat > /etc/systemd/system/rc-local.service << EOF
-[Unit]
-Description=/etc/rc.local Compatibility
-ConditionPathExists=/etc/rc.local
-
-[Service]
-Type=forking
-ExecStart=/etc/rc.local start
-TimeoutSec=0
-StandardOutput=tty
-RemainAfterExit=yes
-SysVStartPriority=99
-
-[Install]
-WantedBy=multi-user.target
-EOF"
-        sudo systemctl enable rc-local
+    # Check if service started successfully
+    if systemctl is-active --quiet genlayer-archive; then
+        print_success "Service started successfully!"
+    else
+        print_error "Service failed to start. Check logs with 'journalctl -u genlayer-archive'"
     fi
 
     echo ""
@@ -503,45 +468,16 @@ EOF"
     echo -e "${CYAN}=== Installation Summary ===${NC}"
     echo -e "Directory: ${YELLOW}$INSTALL_DIR${NC}"
     echo -e "Node Address: ${YELLOW}$NODE_ADDRESS${NC}"
+    echo -e "Service Name: ${YELLOW}genlayer-archive${NC}"
+    echo ""
+    echo -e "${CYAN}=== Commands ===${NC}"
+    echo -e "Check status: ${YELLOW}./check-status.sh${NC} or ${YELLOW}systemctl status genlayer-archive${NC}"
+    echo -e "View logs: ${YELLOW}./view-logs.sh${NC} or ${YELLOW}journalctl -u genlayer-archive -f${NC}"
+    echo -e "Start service: ${YELLOW}systemctl start genlayer-archive${NC}"
+    echo -e "Stop service: ${YELLOW}systemctl stop genlayer-archive${NC}"
+    echo -e "Restart service: ${YELLOW}systemctl restart genlayer-archive${NC}"
     echo ""
     
-    # Ask to start node
-    echo -e "${CYAN}Start the node now?${NC}"
-    echo "1) Yes"
-    echo "2) No"
-    read -p "Select option (1-2): " start_choice
-    
-    if [ "$start_choice" == "1" ]; then
-        print_info "Starting GenLayer Archive Node..."
-        echo ""
-        echo -e "${YELLOW}Do you want to start in an attached or detached screen?${NC}"
-        echo "1) Attached (you'll see the node output directly)"
-        echo "2) Detached (node will run in the background)"
-        read -p "Select option (1-2): " screen_choice
-        
-        if [ "$screen_choice" == "1" ]; then
-            print_info "Starting node in attached screen session..."
-            print_info "To detach: Press ${YELLOW}Ctrl+A, then D${NC}"
-            sleep 3
-            screen -S genlayer ./bin/genlayernode run -c $(pwd)/configs/node/config.yaml --password "$NODE_PASSWORD"
-        else
-            ./start-node.sh
-            print_success "Node started in screen session!"
-            echo ""
-            echo -e "${CYAN}=== Node Commands ===${NC}"
-            echo -e "View output: ${YELLOW}screen -r genlayer${NC}"
-            echo -e "Check status: ${YELLOW}./check-status.sh${NC}"
-            echo -e "View logs: ${YELLOW}./view-logs.sh${NC}"
-        fi
-    else
-        echo ""
-        echo -e "${CYAN}=== Node Commands ===${NC}"
-        echo -e "Start node: ${YELLOW}./start-node.sh${NC}"
-        echo -e "Check status: ${YELLOW}./check-status.sh${NC}"
-        echo -e "View logs: ${YELLOW}./view-logs.sh${NC}"
-    fi
-    
-    echo ""
     read -p "Press Enter to return to main menu..."
 }
 
@@ -565,17 +501,17 @@ check_node_status() {
         return
     }
 
-    # Check screen session
-    if screen -list 2>/dev/null | grep -q "genlayer"; then
-        echo -e "Node Process: ${GREEN}✓${NC} Running"
+    # Check if service is running
+    if systemctl is-active --quiet genlayer-archive; then
+        echo -e "Service: ${GREEN}✓${NC} Running"
         NODE_RUNNING=true
     else
-        echo -e "Node Process: ${RED}✗${NC} Not running"
+        echo -e "Service: ${RED}✗${NC} Not running"
         NODE_RUNNING=false
     fi
 
     # Check WebDriver
-    if docker ps 2>/dev/null | grep -q selenium; then
+    if docker ps 2>/dev/null | grep -q genlayer-node-webdriver; then
         echo -e "WebDriver: ${GREEN}✓${NC} Running"
     else
         echo -e "WebDriver: ${RED}✗${NC} Not running"
@@ -618,8 +554,8 @@ check_node_status() {
     echo -e "${CYAN}=== Quick Actions ===${NC}"
     
     if [ "$NODE_RUNNING" = false ]; then
-        echo "1) Start node"
-        echo "2) View recent logs"
+        echo "1) Start service"
+        echo "2) View logs"
         echo "3) Return to main menu"
         echo ""
         read -p "Select option (1-3): " action
@@ -627,48 +563,36 @@ check_node_status() {
         case $action in
             1)
                 echo ""
-                print_info "Starting node..."
-                echo ""
-                echo -e "${YELLOW}Do you want to start in an attached or detached screen?${NC}"
-                echo "1) Attached (you'll see the node output directly)"
-                echo "2) Detached (node will run in the background)"
-                read -p "Select option (1-2): " screen_choice
+                print_info "Starting service..."
+                sudo systemctl start genlayer-archive
+                sleep 3
                 
-                # Ensure Docker is running
-                $DOCKER_COMPOSE_CMD up -d > /dev/null 2>&1
-                
-                # Load password
-                NODE_PASSWORD=$(cat .node_password)
-                
-                if [ "$screen_choice" == "1" ]; then
-                    print_info "Starting node in attached screen session..."
-                    print_info "To detach: Press ${YELLOW}Ctrl+A, then D${NC}"
-                    sleep 3
-                    screen -S genlayer ./bin/genlayernode run -c $(pwd)/configs/node/config.yaml --password "$NODE_PASSWORD"
+                if systemctl is-active --quiet genlayer-archive; then
+                    print_success "Service started successfully!"
                 else
-                    screen -S genlayer -d -m bash -c "./bin/genlayernode run -c $(pwd)/configs/node/config.yaml --password \"$NODE_PASSWORD\""
-                    print_success "Node started in detached screen session"
-                    echo ""
-                    echo -e "To view output: ${YELLOW}screen -r genlayer${NC}"
-                    echo ""
-                    read -p "Press Enter to continue..."
+                    print_error "Service failed to start. Check logs with 'journalctl -u genlayer-archive'"
                 fi
+                
+                echo ""
+                read -p "Press Enter to continue..."
                 check_node_status
                 ;;
             2)
+                echo ""
+                echo -e "${CYAN}=== Service Logs ===${NC}"
+                sudo journalctl -u genlayer-archive -n 50 --no-pager
+                
                 if [ -d "./data/node/logs" ]; then
                     echo ""
-                    echo -e "${CYAN}=== Recent Logs ===${NC}"
+                    echo -e "${CYAN}=== File Logs ===${NC}"
                     ls -1 ./data/node/logs/*.log 2>/dev/null | while read logfile; do
                         echo -e "${YELLOW}$(basename "$logfile"):${NC}"
                         tail -n 10 "$logfile"
                         echo ""
                     done
-                    read -p "Press Enter to continue..."
-                else
-                    print_error "No logs directory found"
-                    sleep 2
                 fi
+                
+                read -p "Press Enter to continue..."
                 check_node_status
                 ;;
             3)
@@ -681,41 +605,34 @@ check_node_status() {
                 ;;
         esac
     else
-        echo "1) View node output"
-        echo "2) View recent logs"
-        echo "3) Check sync progress"
-        echo "4) Restart node"
+        echo "1) View logs"
+        echo "2) Check sync progress"
+        echo "3) Restart service"
+        echo "4) Stop service"
         echo "5) Return to main menu"
         echo ""
         read -p "Select option (1-5): " action
 
         case $action in
             1)
-                if screen -list 2>/dev/null | grep -q "genlayer"; then
-                    echo ""
-                    print_info "Attaching to screen. Press Ctrl+A, then D to detach."
-                    sleep 2
-                    screen -r genlayer
-                fi
-                check_node_status
-                ;;
-            2)
+                echo ""
+                echo -e "${CYAN}=== Service Logs ===${NC}"
+                sudo journalctl -u genlayer-archive -n 50 --no-pager
+                
                 if [ -d "./data/node/logs" ]; then
                     echo ""
-                    echo -e "${CYAN}=== Recent Logs ===${NC}"
+                    echo -e "${CYAN}=== File Logs ===${NC}"
                     ls -1 ./data/node/logs/*.log 2>/dev/null | while read logfile; do
                         echo -e "${YELLOW}$(basename "$logfile"):${NC}"
                         tail -n 10 "$logfile"
                         echo ""
                     done
-                    read -p "Press Enter to continue..."
-                else
-                    print_error "No logs directory found"
-                    sleep 2
                 fi
+                
+                read -p "Press Enter to continue..."
                 check_node_status
                 ;;
-            3)
+            2)
                 echo ""
                 print_info "Checking sync progress..."
                 if timeout 5 curl -s -X POST http://localhost:9151 \
@@ -738,24 +655,28 @@ check_node_status() {
                 read -p "Press Enter to continue..."
                 check_node_status
                 ;;
+            3)
+                echo ""
+                print_info "Restarting service..."
+                sudo systemctl restart genlayer-archive
+                sleep 3
+                
+                if systemctl is-active --quiet genlayer-archive; then
+                    print_success "Service restarted successfully!"
+                else
+                    print_error "Service failed to restart. Check logs with 'journalctl -u genlayer-archive'"
+                fi
+                
+                echo ""
+                read -p "Press Enter to continue..."
+                check_node_status
+                ;;
             4)
                 echo ""
-                print_info "Restarting node..."
-                if screen -list 2>/dev/null | grep -q "genlayer"; then
-                    screen -S genlayer -X quit 2>/dev/null
-                    print_success "Old screen session terminated"
-                fi
+                print_info "Stopping service..."
+                sudo systemctl stop genlayer-archive
                 sleep 2
-                
-                # Ensure Docker is running
-                $DOCKER_COMPOSE_CMD up -d > /dev/null 2>&1
-                
-                # Load password
-                NODE_PASSWORD=$(cat .node_password)
-                
-                # Start new session
-                screen -S genlayer -d -m bash -c "./bin/genlayernode run -c $(pwd)/configs/node/config.yaml --password \"$NODE_PASSWORD\""
-                print_success "Node restarted in screen session"
+                print_success "Service stopped"
                 echo ""
                 read -p "Press Enter to continue..."
                 check_node_status
@@ -797,6 +718,7 @@ delete_node() {
         echo "• Node configuration"
         echo "• Account information"
         echo "• Docker containers"
+        echo "• Systemd service"
         echo ""
         echo -e "${RED}This cannot be undone!${NC}"
         echo ""
@@ -810,7 +732,12 @@ delete_node() {
         fi
     fi
 
-    print_info "Stopping node..."
+    print_info "Stopping service..."
+    sudo systemctl stop genlayer-archive 2>/dev/null || true
+    sudo systemctl disable genlayer-archive 2>/dev/null || true
+    sudo rm -f /etc/systemd/system/genlayer-archive.service
+    sudo systemctl daemon-reload
+    print_success "Service removed"
     
     # Kill screen session
     if screen -list 2>/dev/null | grep -q "genlayer"; then
@@ -821,12 +748,7 @@ delete_node() {
     # Remove Docker containers
     cd "$INSTALL_DIR/genlayer-node-linux-amd64" 2>/dev/null
     if [ -f "docker-compose.yml" ]; then
-        if [ -n "$DOCKER_COMPOSE_CMD" ]; then
-            $DOCKER_COMPOSE_CMD down > /dev/null 2>&1
-        else
-            # Try both commands as fallback
-            docker-compose down > /dev/null 2>&1 || docker compose down > /dev/null 2>&1
-        fi
+        docker-compose down > /dev/null 2>&1
         print_success "Docker containers removed"
     fi
 
@@ -853,10 +775,10 @@ main_menu() {
         
         if is_node_installed; then
             echo -e "${GREEN}Status: Installed${NC}"
-            if screen -list 2>/dev/null | grep -q "genlayer"; then
-                echo -e "${GREEN}Node: Running${NC}"
+            if systemctl is-active --quiet genlayer-archive; then
+                echo -e "${GREEN}Service: Running${NC}"
             else
-                echo -e "${YELLOW}Node: Stopped${NC}"
+                echo -e "${YELLOW}Service: Stopped${NC}"
             fi
         else
             echo -e "${RED}Status: Not Installed${NC}"
@@ -893,9 +815,6 @@ main_menu() {
         esac
     done
 }
-
-# Detect docker compose command before starting
-detect_docker_compose
 
 # Start the script
 main_menu
