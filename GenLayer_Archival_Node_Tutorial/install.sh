@@ -6,44 +6,24 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Installation directory
 INSTALL_DIR="$HOME/genlayer-archive-node"
 
-# Function to display the animated banner
+# Function to display the banner
 display_banner() {
-    # Install dependencies for animation if not present
-    if ! command -v figlet &> /dev/null || ! command -v lolcat &> /dev/null; then
-        echo "Installing animation dependencies..."
-        sudo apt-get update > /dev/null 2>&1
-        
-        if ! command -v gem &> /dev/null; then
-            sudo apt-get install -y ruby-full > /dev/null 2>&1
-        fi
-        
-        if ! command -v figlet &> /dev/null; then
-            sudo apt-get install -y figlet > /dev/null 2>&1
-        fi
-        
-        if ! command -v lolcat &> /dev/null; then
-            sudo gem install lolcat > /dev/null 2>&1
-        fi
-    fi
-
     clear
-    figlet -f slant "GenLayer Manager" | lolcat
-    figlet -f digital "by BlackNodes" | lolcat
-    echo ""
-    echo "========================================================================" | lolcat
+    echo -e "${CYAN}=======================================${NC}"
+    echo -e "${GREEN}     GenLayer Archive Node Setup      ${NC}"
+    echo -e "${CYAN}=======================================${NC}"
     echo ""
 }
 
 # Print functions
 print_info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
+    echo -e "${BLUE}[INFO]${NC} $1"
 }
 
 print_warn() {
@@ -326,6 +306,38 @@ EOF
         print_error "Failed to start WebDriver"
     fi
 
+    # Create startup script with working method
+    print_info "Creating startup script..."
+    cat > start-node.sh << EOF
+#!/bin/bash
+cd "$INSTALL_DIR/genlayer-node-linux-amd64"
+export HEURISTKEY="\$(cat .heurist_key)"
+export COMPUT3KEY="dummy-key"
+export IOINTELLIGENCE_API_KEY="dummy-key"
+
+# First ensure Docker container is running
+docker compose up -d
+
+# Start the node manually in a screen session
+screen -S genlayer-archive
+EOF
+    chmod +x start-node.sh
+
+    # Create rc.local for auto-start
+    print_info "Setting up auto-start on boot..."
+    sudo cat > /etc/rc.local << EOF
+#!/bin/bash
+cd "$INSTALL_DIR/genlayer-node-linux-amd64"
+docker compose up -d
+exit 0
+EOF
+    sudo chmod +x /etc/rc.local
+
+    # Enable rc-local service if needed
+    if ! systemctl is-enabled rc-local &>/dev/null; then
+        sudo systemctl enable rc-local
+    fi
+
     echo ""
     print_success "Installation completed!"
     echo ""
@@ -333,90 +345,17 @@ EOF
     echo -e "Directory: ${YELLOW}$INSTALL_DIR${NC}"
     echo -e "Node Address: ${YELLOW}$NODE_ADDRESS${NC}"
     echo ""
-    
-    # Ask to start node
-    echo -e "${CYAN}Start the node now?${NC}"
-    echo "1) Yes"
-    echo "2) No"
-    read -p "Select option (1-2): " start_choice
-    
-    if [ "$start_choice" == "1" ]; then
-        print_info "Starting GenLayer Archive Node..."
-        cd "$INSTALL_DIR/genlayer-node-linux-amd64"
-
-        # Create screen session
-        screen -S genlayer-archive -d -m
-
-        # Send environment variable and node start command
-        screen -S genlayer-archive -X stuff "export HEURISTKEY=\"$HEURIST_KEY\"\n"
-        sleep 1
-        screen -S genlayer-archive -X stuff "./bin/genlayernode run -c $(pwd)/configs/node/config.yaml --password \"$NODE_PASSWORD\"\n"
-
-        sleep 5
-
-        if screen -list | grep -q "genlayer-archive"; then
-            print_success "Node started in screen session!"
-            echo ""
-            echo -e "${CYAN}=== Node Commands ===${NC}"
-            echo -e "View output: ${YELLOW}screen -r genlayer-archive${NC}"
-            echo -e "Detach: ${YELLOW}Ctrl+A, then D${NC}"
-        fi
-    fi
-    
+    print_info "To start the node:"
+    echo -e "${YELLOW}cd $INSTALL_DIR/genlayer-node-linux-amd64${NC}"
+    echo -e "${YELLOW}./start-node.sh${NC}"
+    echo ""
+    print_info "Once the screen session opens, run:"
+    echo -e "${YELLOW}./bin/genlayernode run -c \$(pwd)/configs/node/config.yaml --password \"YOUR_PASSWORD\"${NC}"
+    echo ""
+    print_info "To detach from screen: Press ${YELLOW}Ctrl+A, then D${NC}"
+    echo -e "To reattach: ${YELLOW}screen -r genlayer-archive${NC}"
     echo ""
     read -p "Press Enter to return to main menu..."
-}
-
-# Start node (for already installed nodes)
-start_node() {
-    if ! is_node_installed; then
-        print_error "Node is not installed!"
-        return 1
-    fi
-    
-    cd "$INSTALL_DIR/genlayer-node-linux-amd64"
-    
-    # Check if already running
-    if screen -list 2>/dev/null | grep -q "genlayer-archive"; then
-        print_warn "Node is already running"
-        return 0
-    fi
-    
-    # Load API key
-    if [ -f ".heurist_key" ]; then
-        HEURIST_KEY=$(cat .heurist_key)
-    else
-        print_warn "No API key found. Using dummy key."
-        HEURIST_KEY="dummy-key-for-archive-node"
-    fi
-    
-    # Load password
-    if [ -f ".node_password" ]; then
-        NODE_PASSWORD=$(cat .node_password)
-    else
-        print_error "No password file found!"
-        return 1
-    fi
-    
-    print_info "Starting node..."
-    
-    # Create screen session
-    screen -S genlayer-archive -d -m
-    
-    # Send commands
-    screen -S genlayer-archive -X stuff "export HEURISTKEY=\"$HEURIST_KEY\"\n"
-    sleep 1
-    screen -S genlayer-archive -X stuff "./bin/genlayernode run -c $(pwd)/configs/node/config.yaml --password \"$NODE_PASSWORD\"\n"
-    
-    sleep 3
-    
-    if screen -list | grep -q "genlayer-archive"; then
-        print_success "Node started successfully!"
-        return 0
-    else
-        print_error "Failed to start node"
-        return 1
-    fi
 }
 
 # Check Node Status
@@ -479,14 +418,6 @@ check_node_status() {
         echo -e "${RED}✗${NC} Not responding"
     fi
 
-    # Check health
-    echo -n "Health API: "
-    if timeout 5 curl -s http://localhost:9153/health > /dev/null 2>&1; then
-        echo -e "${GREEN}✓${NC} Responding"
-    else
-        echo -e "${RED}✗${NC} Not responding"
-    fi
-
     # Check logs
     if [ -d "./data/node/logs" ] && [ "$(ls -A ./data/node/logs 2>/dev/null)" ]; then
         echo -e "Logs: ${GREEN}✓${NC} Available"
@@ -507,9 +438,24 @@ check_node_status() {
         case $action in
             1)
                 echo ""
-                start_node
+                print_info "Starting node..."
+                print_info "This will open a screen session. Once it opens, run:"
+                echo -e "${YELLOW}./bin/genlayernode run -c \$(pwd)/configs/node/config.yaml --password \"YOUR_PASSWORD\"${NC}"
                 echo ""
-                read -p "Press Enter to continue..."
+                print_info "Press Enter to continue..."
+                read
+                
+                # Start Docker first
+                docker compose up -d > /dev/null 2>&1
+                sleep 2
+                
+                # Load environment variables
+                export HEURISTKEY=$(cat .heurist_key 2>/dev/null || echo "dummy-key")
+                export COMPUT3KEY="dummy-key"
+                export IOINTELLIGENCE_API_KEY="dummy-key"
+                
+                # Start screen session
+                screen -S genlayer-archive
                 check_node_status
                 ;;
             2)
@@ -538,10 +484,9 @@ check_node_status() {
         echo "1) View node output"
         echo "2) View recent logs"
         echo "3) Check sync progress"
-        echo "4) Restart node"
-        echo "5) Return to main menu"
+        echo "4) Return to main menu"
         echo ""
-        read -p "Select option (1-5): " action
+        read -p "Select option (1-4): " action
 
         case $action in
             1)
@@ -590,16 +535,6 @@ check_node_status() {
                 check_node_status
                 ;;
             4)
-                echo ""
-                print_info "Restarting node..."
-                screen -S genlayer-archive -X quit 2>/dev/null
-                sleep 2
-                start_node
-                echo ""
-                read -p "Press Enter to continue..."
-                check_node_status
-                ;;
-            5)
                 return
                 ;;
             *)
@@ -716,7 +651,7 @@ main_menu() {
                 ;;
             4)
                 echo ""
-                echo "Thank you for using BlackNodes GenLayer Manager!" | lolcat
+                echo "Exiting GenLayer Manager!"
                 echo ""
                 break
                 ;;
