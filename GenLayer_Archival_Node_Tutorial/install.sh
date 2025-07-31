@@ -12,6 +12,9 @@ NC='\033[0m' # No Color
 # Installation directory
 INSTALL_DIR="$HOME/genlayer-archive-node"
 
+# Docker command - will be set based on what's available
+DOCKER_COMPOSE_CMD=""
+
 # Function to display the animated banner
 display_banner() {
     # Install dependencies for animation if not present
@@ -63,6 +66,35 @@ is_node_installed() {
         return 0
     else
         return 1
+    fi
+}
+
+# Detect Docker Compose command
+detect_docker_compose() {
+    # Try docker compose (new style)
+    if docker compose version &>/dev/null; then
+        DOCKER_COMPOSE_CMD="docker compose"
+        print_success "Using docker compose command"
+        return
+    fi
+    
+    # Try docker-compose (old style)
+    if command -v docker-compose &>/dev/null; then
+        DOCKER_COMPOSE_CMD="docker-compose"
+        print_success "Using docker-compose command"
+        return
+    fi
+    
+    # If we get here, we need to install docker-compose
+    print_warn "Docker Compose not found. Installing docker-compose..."
+    sudo apt-get install -y docker-compose > /dev/null 2>&1
+    
+    if command -v docker-compose &>/dev/null; then
+        DOCKER_COMPOSE_CMD="docker-compose"
+        print_success "Installed and using docker-compose command"
+    else
+        print_error "Failed to install docker-compose. Please install it manually."
+        exit 1
     fi
 }
 
@@ -121,6 +153,9 @@ check_dependencies() {
         print_warn "You may need to log out and back in for group changes to take effect"
     fi
     
+    # Detect Docker Compose command
+    detect_docker_compose
+    
     print_success "All dependencies installed and configured!"
 }
 
@@ -136,7 +171,7 @@ stop_services() {
     if [ -d "$INSTALL_DIR/genlayer-node-linux-amd64" ]; then
         cd "$INSTALL_DIR/genlayer-node-linux-amd64"
         if [ -f "docker-compose.yml" ]; then
-            docker compose down 2>/dev/null || true
+            $DOCKER_COMPOSE_CMD down 2>/dev/null || true
         fi
         cd - > /dev/null
     fi
@@ -333,13 +368,13 @@ EOF
     
     # Start WebDriver
     print_info "Starting WebDriver container..."
-    docker compose up -d
+    $DOCKER_COMPOSE_CMD up -d
     sleep 5
 
     if docker ps | grep -q selenium; then
         print_success "WebDriver started successfully"
     else
-        print_error "Failed to start WebDriver"
+        print_error "Failed to start WebDriver. Continuing anyway..."
     fi
 
     # Create helper scripts
@@ -351,7 +386,7 @@ EOF
 cd "$INSTALL_DIR/genlayer-node-linux-amd64"
 
 # Make sure Docker is running
-docker compose up -d
+$DOCKER_COMPOSE_CMD up -d
 
 # Get password
 NODE_PASSWORD=\$(cat .node_password)
@@ -382,7 +417,7 @@ else
 fi
 
 # Check if Docker container is running
-if docker ps | grep -q webdriver; then
+if docker ps | grep -q selenium; then
     echo -e "WebDriver: \033[0;32mRunning\033[0m"
 else
     echo -e "WebDriver: \033[0;31mNot running\033[0m"
@@ -600,7 +635,7 @@ check_node_status() {
                 read -p "Select option (1-2): " screen_choice
                 
                 # Ensure Docker is running
-                docker compose up -d > /dev/null 2>&1
+                $DOCKER_COMPOSE_CMD up -d > /dev/null 2>&1
                 
                 # Load password
                 NODE_PASSWORD=$(cat .node_password)
@@ -713,7 +748,7 @@ check_node_status() {
                 sleep 2
                 
                 # Ensure Docker is running
-                docker compose up -d > /dev/null 2>&1
+                $DOCKER_COMPOSE_CMD up -d > /dev/null 2>&1
                 
                 # Load password
                 NODE_PASSWORD=$(cat .node_password)
@@ -786,7 +821,12 @@ delete_node() {
     # Remove Docker containers
     cd "$INSTALL_DIR/genlayer-node-linux-amd64" 2>/dev/null
     if [ -f "docker-compose.yml" ]; then
-        docker compose down > /dev/null 2>&1
+        if [ -n "$DOCKER_COMPOSE_CMD" ]; then
+            $DOCKER_COMPOSE_CMD down > /dev/null 2>&1
+        else
+            # Try both commands as fallback
+            docker-compose down > /dev/null 2>&1 || docker compose down > /dev/null 2>&1
+        fi
         print_success "Docker containers removed"
     fi
 
@@ -853,6 +893,9 @@ main_menu() {
         esac
     done
 }
+
+# Detect docker compose command before starting
+detect_docker_compose
 
 # Start the script
 main_menu
