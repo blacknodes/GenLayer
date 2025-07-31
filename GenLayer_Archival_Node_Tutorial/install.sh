@@ -1,10 +1,4 @@
-## Installation Script (install.sh)
-
 #!/bin/bash
-
-# GenLayer Archive Node Installation Script by BlackNodes
-# Usage: source <(curl -s https://raw.githubusercontent.com/YOUR_USERNAME/genlayer-archive-node/main/install.sh)
-
 set -e
 
 # Colors
