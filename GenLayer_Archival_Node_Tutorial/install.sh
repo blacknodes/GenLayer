@@ -1,58 +1,224 @@
 #!/bin/bash
+set -e
 
 # Colors
+RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-RED='\033[0;31m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
-# Print functions
-print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
-print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
-print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
-print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+# Installation directory
+INSTALL_DIR="$HOME/genlayer-archive-node"
 
-# Display banner
-echo -e "${GREEN}=============================================${NC}"
-echo -e "${GREEN}      GenLayer Archive Node Installer        ${NC}"
-echo -e "${GREEN}=============================================${NC}"
-echo ""
+# Function to display the animated banner
+display_banner() {
+    # Install dependencies for animation if not present
+    if ! command -v figlet &> /dev/null || ! command -v lolcat &> /dev/null; then
+        echo "Installing animation dependencies..."
+        sudo apt-get update > /dev/null 2>&1
+        
+        if ! command -v gem &> /dev/null; then
+            sudo apt-get install -y ruby-full > /dev/null 2>&1
+        fi
+        
+        if ! command -v figlet &> /dev/null; then
+            sudo apt-get install -y figlet > /dev/null 2>&1
+        fi
+        
+        if ! command -v lolcat &> /dev/null; then
+            sudo gem install lolcat > /dev/null 2>&1
+        fi
+    fi
 
-# Function to stop existing services
-stop_services() {
-  print_info "Stopping any existing GenLayer services..."
-  pkill -f genlayernode 2>/dev/null || true
-  pkill -f genvm-modules 2>/dev/null || true
-  
-  if [ -d "./genlayer-node-linux-amd64" ]; then
-    cd ./genlayer-node-linux-amd64
-    docker compose down 2>/dev/null || true
-    cd ..
-  fi
-  
-  print_success "All existing services stopped"
+    clear
+    figlet -f slant "GenLayer" | lolcat
+    figlet -f digital "Archive Node Setup" | lolcat
+    echo ""
+    echo "========================================================================" | lolcat
+    echo ""
 }
 
-# Function to install archive node
-install_node() {
-  # Set version
-  VERSION="v0.3.6"
-  
-  print_info "Downloading GenLayer node version ${VERSION}..."
-  wget -q --show-progress https://storage.googleapis.com/gh-af/genlayer-node/bin/amd64/${VERSION}/genlayer-node-linux-amd64-${VERSION}.tar.gz
-  
-  print_info "Extracting archive..."
-  tar -xzvf genlayer-node-linux-amd64-${VERSION}.tar.gz
-  
-  print_info "Entering directory..."
-  cd genlayer-node-linux-amd64
-  
-  print_info "Creating config directory..."
-  mkdir -p configs/node
-  
-  print_info "Creating configuration file..."
-  cat > configs/node/config.yaml << 'EOL'
+# Print functions
+print_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_warn() {
+    echo -e "${YELLOW}[WARN]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+# Check if node is installed
+is_node_installed() {
+    if [ -d "$INSTALL_DIR/genlayer-node-linux-amd64" ] && [ -f "$INSTALL_DIR/genlayer-node-linux-amd64/bin/genlayernode" ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Check and install dependencies
+check_dependencies() {
+    print_info "Checking and installing dependencies..."
+    
+    # Update package lists
+    sudo apt-get update > /dev/null 2>&1
+    
+    # Install basic dependencies
+    PACKAGES_TO_INSTALL=""
+    
+    if ! command -v wget &> /dev/null; then
+        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL wget"
+    fi
+    
+    if ! command -v curl &> /dev/null; then
+        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL curl"
+    fi
+    
+    if ! command -v jq &> /dev/null; then
+        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL jq"
+    fi
+    
+    if ! command -v screen &> /dev/null; then
+        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL screen"
+    fi
+    
+    if ! command -v bc &> /dev/null; then
+        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL bc"
+    fi
+    
+    # Install Docker if not present
+    if ! command -v docker &> /dev/null; then
+        print_info "Docker not found. Installing Docker..."
+        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL docker.io"
+    fi
+    
+    # Install packages if needed
+    if [ ! -z "$PACKAGES_TO_INSTALL" ]; then
+        print_info "Installing required packages: $PACKAGES_TO_INSTALL"
+        sudo apt-get install -y $PACKAGES_TO_INSTALL > /dev/null 2>&1
+    fi
+    
+    # Make sure Docker service is running
+    if ! sudo systemctl is-active --quiet docker; then
+        print_info "Starting Docker service..."
+        sudo systemctl start docker
+    fi
+    
+    # Add current user to Docker group if not already
+    if ! groups | grep -q docker; then
+        print_info "Adding user to Docker group..."
+        sudo usermod -aG docker $USER
+        print_warn "You may need to log out and back in for group changes to take effect"
+    fi
+    
+    print_success "All dependencies installed and configured!"
+}
+
+# Stop existing services
+stop_services() {
+    print_info "Stopping any existing GenLayer services..."
+    
+    # Stop any running GenLayer nodes
+    pkill -f genlayernode 2>/dev/null || true
+    pkill -f genvm-modules 2>/dev/null || true
+    
+    # If installation directory exists, stop Docker containers
+    if [ -d "$INSTALL_DIR/genlayer-node-linux-amd64" ]; then
+        cd "$INSTALL_DIR/genlayer-node-linux-amd64"
+        if [ -f "docker-compose.yml" ]; then
+            docker compose down 2>/dev/null || true
+        fi
+        cd - > /dev/null
+    fi
+    
+    print_success "All existing services stopped"
+}
+
+# Install Archive Node
+install_archive_node() {
+    display_banner
+    
+    # Check if already installed
+    if is_node_installed; then
+        print_warn "GenLayer Archive Node is already installed at $INSTALL_DIR"
+        echo ""
+        echo -e "${YELLOW}What would you like to do?${NC}"
+        echo "1) Keep existing installation"
+        echo "2) Reinstall (delete all data)"
+        echo ""
+        read -p "Select option (1-2): " reinstall_choice
+        
+        case $reinstall_choice in
+            1)
+                print_info "Keeping existing installation"
+                sleep 2
+                return
+                ;;
+            2)
+                delete_node silent
+                ;;
+            *)
+                print_error "Invalid option"
+                sleep 2
+                return
+                ;;
+        esac
+    fi
+
+    print_info "Starting GenLayer Archive Node installation..."
+    echo ""
+    
+    # Check system requirements
+    print_info "Checking system requirements..."
+
+    # Check available RAM
+    TOTAL_RAM=$(free -g | awk '/^Mem:/{print $2}')
+    if [ "$TOTAL_RAM" -lt 15 ]; then
+        print_warn "System has less than 16GB RAM. Archive node requires at least 16GB RAM (32GB recommended)"
+        echo ""
+        echo "Continue anyway?"
+        echo "1) Yes"
+        echo "2) No"
+        read -p "Select option (1-2): " ram_choice
+        
+        if [ "$ram_choice" != "1" ]; then
+            return
+        fi
+    fi
+
+    # Check dependencies
+    check_dependencies
+
+    # Create working directory
+    print_info "Creating installation directory at $INSTALL_DIR"
+    mkdir -p "$INSTALL_DIR"
+    cd "$INSTALL_DIR"
+
+    # Download node software
+    VERSION="v0.3.6"
+    print_info "Downloading GenLayer node version $VERSION..."
+    wget -q --show-progress https://storage.googleapis.com/gh-af/genlayer-node/bin/amd64/${VERSION}/genlayer-node-linux-amd64-${VERSION}.tar.gz
+    
+    print_info "Extracting archive..."
+    tar -xzf genlayer-node-linux-amd64-${VERSION}.tar.gz
+    cd genlayer-node-linux-amd64
+    
+    print_success "Node software downloaded and extracted!"
+
+    # Create configuration
+    print_info "Creating archive node configuration..."
+    mkdir -p configs/node
+    cat > configs/node/config.yaml << 'EOF'
 rollup:
   zksyncurl: "https://genlayer-testnet.rpc.caldera.xyz/http"
   zksyncwebsocketurl: "wss://genlayer-testnet.rpc.caldera.xyz/ws"
@@ -61,6 +227,7 @@ consensus:
   contractmainaddress: "0xe30293d600fF9B2C865d91307826F28006A458f4"
   contractdataaddress: "0x2a50afD9d3E0ACC824aC4850d7B4c5561aB5D27a"
   contractidlenessaddress: "0xD1D09c2743DD26d718367Ba249Ee1629BE88CF33"
+  contractstakingaddress: "0x143d20974FA35f72B8103f54D8A47F2991940d99"
   genesis: 817855
 datadir: "./data/node"
 logging:
@@ -116,10 +283,11 @@ merkleforest:
 merkletree:
   maxdepth: 16
   dbpath: "./data/node/merkle/tree/"
-EOL
+EOF
 
-  print_info "Creating docker-compose.yml file..."
-  cat > docker-compose.yml << 'EOL'
+    # Create Docker Compose file
+    print_info "Setting up Docker Compose..."
+    cat > docker-compose.yml << 'EOF'
 version: '3.8'
 services:
   webdriver:
@@ -131,174 +299,560 @@ services:
       - SE_NODE_SESSION_TIMEOUT=86400
     shm_size: 2gb
     restart: unless-stopped
-EOL
+EOF
 
-  print_info "Running optional precompilation step..."
-  ./third_party/genvm/bin/genvm precompile
-  
-  print_info "Creating node account..."
-  echo ""
-  echo -e "${YELLOW}Please enter a password for your node account (minimum 8 characters):${NC}"
-  read -s NODE_PASSWORD
-  echo ""
-  
-  if [ ${#NODE_PASSWORD} -lt 8 ]; then
-    print_error "Password is too short! Please use at least 8 characters."
-    exit 1
-  fi
-  
-  # Save password to file for convenience
-  echo "$NODE_PASSWORD" > .node_password
-  chmod 600 .node_password
-  
-  ./bin/genlayernode account new -c $(pwd)/configs/node/config.yaml --password "$NODE_PASSWORD"
-  
-  print_info "Starting WebDriver container..."
-  docker compose up -d
-  
-  print_success "Installation completed!"
-}
+    # Run precompilation (optional but recommended)
+    print_info "Running precompilation step (this may take some time)..."
+    ./third_party/genvm/bin/genvm precompile
 
-# Function to start node
-start_node() {
-  if [ ! -f ".node_password" ]; then
-    echo -e "${YELLOW}Please enter your node password:${NC}"
-    read -s NODE_PASSWORD
+    # Set up node account
+    print_info "Creating node account..."
     echo ""
-  else
-    NODE_PASSWORD=$(cat .node_password)
-  fi
-  
-  print_info "Starting node in a screen session..."
-  print_info "A screen session will be created. Inside it, the node will be started."
-  print_info "To detach from screen: Press ${YELLOW}Ctrl+A, then D${NC}"
-  print_info "To reattach later: Run ${YELLOW}screen -r genlayer${NC}"
-  echo ""
-  print_info "Press Enter to continue..."
-  read
-  
-  screen -S genlayer ./bin/genlayernode run -c $(pwd)/configs/node/config.yaml --password "$NODE_PASSWORD"
-}
-
-# Function to check node status
-check_status() {
-  echo -e "${GREEN}=== GenLayer Node Status ===${NC}"
-  
-  # Check if screen session exists
-  if screen -list | grep -q genlayer; then
-    echo -e "Node Screen: ${GREEN}Running${NC}"
-  else
-    echo -e "Node Screen: ${RED}Not running${NC}"
-  fi
-  
-  # Check if Docker container is running
-  if docker ps | grep -q webdriver; then
-    echo -e "WebDriver: ${GREEN}Running${NC}"
-  else
-    echo -e "WebDriver: ${RED}Not running${NC}"
-  fi
-  
-  # Check RPC endpoint
-  echo -n "RPC Status: "
-  if curl -s -X POST http://localhost:9151 \
-    -H "Content-Type: application/json" \
-    -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | grep -q "result"; then
+    echo -e "${YELLOW}Please enter a password for your node account (minimum 8 characters):${NC}"
     
-    BLOCK=$(curl -s -X POST http://localhost:9151 \
-      -H "Content-Type: application/json" \
-      -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | \
-      grep -o '"result":"[^"]*"' | cut -d'"' -f4 | sed 's/0x//')
-    
-    if [ -n "$BLOCK" ]; then
-      DECIMAL_BLOCK=$((16#$BLOCK))
-      echo -e "${GREEN}Responding${NC} (Block: $DECIMAL_BLOCK)"
-    else
-      echo -e "${GREEN}Responding${NC}"
-    fi
-  else
-    echo -e "${RED}Not responding${NC}"
-  fi
-  
-  echo ""
-}
-
-# Function to view logs
-view_logs() {
-  if [ -d "./data/node/logs" ]; then
-    echo -e "${GREEN}=== Recent Logs ===${NC}"
-    ls -1 ./data/node/logs/*.log 2>/dev/null | while read logfile; do
-      echo -e "${YELLOW}$(basename "$logfile"):${NC}"
-      tail -n 10 "$logfile"
-      echo ""
+    while true; do
+        read -s NODE_PASSWORD
+        echo ""
+        
+        if [ ${#NODE_PASSWORD} -lt 8 ]; then
+            print_error "Password must be at least 8 characters! Try again."
+            continue
+        fi
+        
+        break
     done
-  else
-    print_error "No logs directory found"
-  fi
-}
 
-# Function to display help menu
-show_help() {
-  echo -e "${GREEN}=== Available Commands ===${NC}"
-  echo "1. install - Install the GenLayer node"
-  echo "2. start   - Start the node in a screen session"
-  echo "3. status  - Check node status"
-  echo "4. logs    - View recent logs"
-  echo "5. help    - Show this help menu"
-  echo ""
-}
+    # Save password to file
+    echo "$NODE_PASSWORD" > .node_password
+    chmod 600 .node_password
 
-# Main execution
-if [ -z "$1" ]; then
-  # If no arguments provided, run the full installation
-  stop_services
-  install_node
-  echo ""
-  echo -e "${GREEN}=== Installation Complete ===${NC}"
-  echo "To start your node, run: $0 start"
-  echo "To check status: $0 status"
-  echo "To view logs: $0 logs"
-  echo ""
+    # Create account
+    ./bin/genlayernode account new -c $(pwd)/configs/node/config.yaml --password "$NODE_PASSWORD" > account_info.txt 2>&1
+    NODE_ADDRESS=$(grep "New address:" account_info.txt | awk '{print $3}')
+    print_success "Node account created: $NODE_ADDRESS"
+    
+    # Start WebDriver
+    print_info "Starting WebDriver container..."
+    docker compose up -d
+    sleep 5
+
+    if docker ps | grep -q selenium; then
+        print_success "WebDriver started successfully"
+    else
+        print_error "Failed to start WebDriver"
+    fi
+
+    # Create helper scripts
+    print_info "Creating helper scripts..."
+    
+    # Script to start node
+    cat > start-node.sh << EOF
+#!/bin/bash
+cd "$INSTALL_DIR/genlayer-node-linux-amd64"
+
+# Make sure Docker is running
+docker compose up -d
+
+# Get password
+NODE_PASSWORD=\$(cat .node_password)
+
+# Start the node in a screen session
+echo "Starting GenLayer node in screen session 'genlayer'..."
+echo "To view logs: screen -r genlayer"
+echo "To detach: Press Ctrl+A, then D"
+echo ""
+echo "Starting node..."
+screen -S genlayer -d -m bash -c './bin/genlayernode run -c \$(pwd)/configs/node/config.yaml --password "\$NODE_PASSWORD"'
+echo "Node started!"
+EOF
+    chmod +x start-node.sh
+    
+    # Script to check status
+    cat > check-status.sh << EOF
+#!/bin/bash
+cd "$INSTALL_DIR/genlayer-node-linux-amd64"
+
+echo -e "\033[0;32m=== GenLayer Node Status ===\033[0m"
+
+# Check if screen session exists
+if screen -list | grep -q genlayer; then
+    echo -e "Node Screen: \033[0;32mRunning\033[0m"
 else
-  # Handle different commands
-  case "$1" in
-    install)
-      stop_services
-      install_node
-      ;;
-    start)
-      if [ ! -d "./genlayer-node-linux-amd64" ]; then
-        cd ./genlayer-node-linux-amd64 2>/dev/null || {
-          print_error "GenLayer node not installed. Run '$0 install' first."
-          exit 1
-        }
-      fi
-      start_node
-      ;;
-    status)
-      if [ ! -d "./genlayer-node-linux-amd64" ]; then
-        cd ./genlayer-node-linux-amd64 2>/dev/null || {
-          print_error "GenLayer node not installed. Run '$0 install' first."
-          exit 1
-        }
-      fi
-      check_status
-      ;;
-    logs)
-      if [ ! -d "./genlayer-node-linux-amd64" ]; then
-        cd ./genlayer-node-linux-amd64 2>/dev/null || {
-          print_error "GenLayer node not installed. Run '$0 install' first."
-          exit 1
-        }
-      fi
-      view_logs
-      ;;
-    help)
-      show_help
-      ;;
-    *)
-      print_error "Unknown command: $1"
-      show_help
-      exit 1
-      ;;
-  esac
+    echo -e "Node Screen: \033[0;31mNot running\033[0m"
 fi
+
+# Check if Docker container is running
+if docker ps | grep -q webdriver; then
+    echo -e "WebDriver: \033[0;32mRunning\033[0m"
+else
+    echo -e "WebDriver: \033[0;31mNot running\033[0m"
+fi
+
+# Check RPC endpoint
+echo -n "RPC Status: "
+if curl -s -X POST http://localhost:9151 \\
+  -H "Content-Type: application/json" \\
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | grep -q "result"; then
+  
+  BLOCK=\$(curl -s -X POST http://localhost:9151 \\
+    -H "Content-Type: application/json" \\
+    -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | \\
+    grep -o '"result":"[^"]*"' | cut -d'"' -f4 | sed 's/0x//')
+  
+  if [ -n "\$BLOCK" ]; then
+    DECIMAL_BLOCK=\$((16#\$BLOCK))
+    echo -e "\033[0;32mResponding\033[0m (Block: \$DECIMAL_BLOCK)"
+  else
+    echo -e "\033[0;32mResponding\033[0m"
+  fi
+else
+  echo -e "\033[0;31mNot responding\033[0m"
+fi
+
+echo ""
+EOF
+    chmod +x check-status.sh
+    
+    # Script to view logs
+    cat > view-logs.sh << EOF
+#!/bin/bash
+cd "$INSTALL_DIR/genlayer-node-linux-amd64"
+
+if [ -d "./data/node/logs" ]; then
+  echo -e "\033[0;32m=== Recent Logs ===\033[0m"
+  ls -1 ./data/node/logs/*.log 2>/dev/null | while read logfile; do
+    echo -e "\033[1;33m\$(basename "\$logfile"):\033[0m"
+    tail -n 10 "\$logfile"
+    echo ""
+  done
+else
+  echo -e "\033[0;31m[ERROR]\033[0m No logs directory found"
+fi
+EOF
+    chmod +x view-logs.sh
+    
+    # Create rc.local for auto-start
+    print_info "Setting up auto-start on boot..."
+    sudo bash -c "cat > /etc/rc.local << EOF
+#!/bin/bash
+cd $INSTALL_DIR/genlayer-node-linux-amd64
+./start-node.sh > /var/log/genlayer-startup.log 2>&1
+exit 0
+EOF"
+    sudo chmod +x /etc/rc.local
+    
+    # Enable rc-local service if needed
+    if ! systemctl is-enabled rc-local &>/dev/null; then
+        sudo bash -c "cat > /etc/systemd/system/rc-local.service << EOF
+[Unit]
+Description=/etc/rc.local Compatibility
+ConditionPathExists=/etc/rc.local
+
+[Service]
+Type=forking
+ExecStart=/etc/rc.local start
+TimeoutSec=0
+StandardOutput=tty
+RemainAfterExit=yes
+SysVStartPriority=99
+
+[Install]
+WantedBy=multi-user.target
+EOF"
+        sudo systemctl enable rc-local
+    fi
+
+    echo ""
+    print_success "Installation completed!"
+    echo ""
+    echo -e "${CYAN}=== Installation Summary ===${NC}"
+    echo -e "Directory: ${YELLOW}$INSTALL_DIR${NC}"
+    echo -e "Node Address: ${YELLOW}$NODE_ADDRESS${NC}"
+    echo ""
+    
+    # Ask to start node
+    echo -e "${CYAN}Start the node now?${NC}"
+    echo "1) Yes"
+    echo "2) No"
+    read -p "Select option (1-2): " start_choice
+    
+    if [ "$start_choice" == "1" ]; then
+        print_info "Starting GenLayer Archive Node..."
+        echo ""
+        echo -e "${YELLOW}Do you want to start in an attached or detached screen?${NC}"
+        echo "1) Attached (you'll see the node output directly)"
+        echo "2) Detached (node will run in the background)"
+        read -p "Select option (1-2): " screen_choice
+        
+        if [ "$screen_choice" == "1" ]; then
+            print_info "Starting node in attached screen session..."
+            print_info "To detach: Press ${YELLOW}Ctrl+A, then D${NC}"
+            sleep 3
+            screen -S genlayer ./bin/genlayernode run -c $(pwd)/configs/node/config.yaml --password "$NODE_PASSWORD"
+        else
+            ./start-node.sh
+            print_success "Node started in screen session!"
+            echo ""
+            echo -e "${CYAN}=== Node Commands ===${NC}"
+            echo -e "View output: ${YELLOW}screen -r genlayer${NC}"
+            echo -e "Check status: ${YELLOW}./check-status.sh${NC}"
+            echo -e "View logs: ${YELLOW}./view-logs.sh${NC}"
+        fi
+    else
+        echo ""
+        echo -e "${CYAN}=== Node Commands ===${NC}"
+        echo -e "Start node: ${YELLOW}./start-node.sh${NC}"
+        echo -e "Check status: ${YELLOW}./check-status.sh${NC}"
+        echo -e "View logs: ${YELLOW}./view-logs.sh${NC}"
+    fi
+    
+    echo ""
+    read -p "Press Enter to return to main menu..."
+}
+
+# Check Node Status
+check_node_status() {
+    display_banner
+    
+    if ! is_node_installed; then
+        print_error "GenLayer Archive Node is not installed!"
+        echo ""
+        read -p "Press Enter to return to main menu..."
+        return
+    fi
+
+    echo -e "${CYAN}=== GenLayer Archive Node Status ===${NC}"
+    echo ""
+
+    cd "$INSTALL_DIR/genlayer-node-linux-amd64" 2>/dev/null || {
+        print_error "Installation directory not found"
+        read -p "Press Enter to return to main menu..."
+        return
+    }
+
+    # Check screen session
+    if screen -list 2>/dev/null | grep -q "genlayer"; then
+        echo -e "Node Process: ${GREEN}✓${NC} Running"
+        NODE_RUNNING=true
+    else
+        echo -e "Node Process: ${RED}✗${NC} Not running"
+        NODE_RUNNING=false
+    fi
+
+    # Check WebDriver
+    if docker ps 2>/dev/null | grep -q selenium; then
+        echo -e "WebDriver: ${GREEN}✓${NC} Running"
+    else
+        echo -e "WebDriver: ${RED}✗${NC} Not running"
+    fi
+
+    # Check RPC with timeout
+    echo -n "RPC Status: "
+    if timeout 5 curl -s -X POST http://localhost:9151 \
+      -H "Content-Type: application/json" \
+      -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' > /tmp/rpc_check 2>/dev/null; then
+        
+        if [ -s /tmp/rpc_check ]; then
+            BLOCK_HEX=$(cat /tmp/rpc_check | jq -r '.result' 2>/dev/null || echo "null")
+            if [ -n "$BLOCK_HEX" ] && [ "$BLOCK_HEX" != "null" ]; then
+                BLOCK_NUMBER=$(echo $BLOCK_HEX | sed 's/0x//' | tr '[:lower:]' '[:upper:]' | xargs -I {} echo "ibase=16; {}" | bc 2>/dev/null || echo "0")
+                if [ "$BLOCK_NUMBER" != "0" ]; then
+                    echo -e "${GREEN}✓${NC} Active (Block: $BLOCK_NUMBER)"
+                else
+                    echo -e "${YELLOW}⚠${NC} Invalid block"
+                fi
+            else
+                echo -e "${RED}✗${NC} Invalid response"
+            fi
+        else
+            echo -e "${RED}✗${NC} Empty response"
+        fi
+        rm -f /tmp/rpc_check
+    else
+        echo -e "${RED}✗${NC} Not responding"
+    fi
+
+    # Check logs
+    if [ -d "./data/node/logs" ] && [ "$(ls -A ./data/node/logs 2>/dev/null)" ]; then
+        echo -e "Logs: ${GREEN}✓${NC} Available"
+    else
+        echo -e "Logs: ${YELLOW}⚠${NC} No logs found"
+    fi
+
+    echo ""
+    echo -e "${CYAN}=== Quick Actions ===${NC}"
+    
+    if [ "$NODE_RUNNING" = false ]; then
+        echo "1) Start node"
+        echo "2) View recent logs"
+        echo "3) Return to main menu"
+        echo ""
+        read -p "Select option (1-3): " action
+        
+        case $action in
+            1)
+                echo ""
+                print_info "Starting node..."
+                echo ""
+                echo -e "${YELLOW}Do you want to start in an attached or detached screen?${NC}"
+                echo "1) Attached (you'll see the node output directly)"
+                echo "2) Detached (node will run in the background)"
+                read -p "Select option (1-2): " screen_choice
+                
+                # Ensure Docker is running
+                docker compose up -d > /dev/null 2>&1
+                
+                # Load password
+                NODE_PASSWORD=$(cat .node_password)
+                
+                if [ "$screen_choice" == "1" ]; then
+                    print_info "Starting node in attached screen session..."
+                    print_info "To detach: Press ${YELLOW}Ctrl+A, then D${NC}"
+                    sleep 3
+                    screen -S genlayer ./bin/genlayernode run -c $(pwd)/configs/node/config.yaml --password "$NODE_PASSWORD"
+                else
+                    screen -S genlayer -d -m bash -c "./bin/genlayernode run -c $(pwd)/configs/node/config.yaml --password \"$NODE_PASSWORD\""
+                    print_success "Node started in detached screen session"
+                    echo ""
+                    echo -e "To view output: ${YELLOW}screen -r genlayer${NC}"
+                    echo ""
+                    read -p "Press Enter to continue..."
+                fi
+                check_node_status
+                ;;
+            2)
+                if [ -d "./data/node/logs" ]; then
+                    echo ""
+                    echo -e "${CYAN}=== Recent Logs ===${NC}"
+                    ls -1 ./data/node/logs/*.log 2>/dev/null | while read logfile; do
+                        echo -e "${YELLOW}$(basename "$logfile"):${NC}"
+                        tail -n 10 "$logfile"
+                        echo ""
+                    done
+                    read -p "Press Enter to continue..."
+                else
+                    print_error "No logs directory found"
+                    sleep 2
+                fi
+                check_node_status
+                ;;
+            3)
+                return
+                ;;
+            *)
+                print_error "Invalid option"
+                sleep 1
+                check_node_status
+                ;;
+        esac
+    else
+        echo "1) View node output"
+        echo "2) View recent logs"
+        echo "3) Check sync progress"
+        echo "4) Restart node"
+        echo "5) Return to main menu"
+        echo ""
+        read -p "Select option (1-5): " action
+
+        case $action in
+            1)
+                if screen -list 2>/dev/null | grep -q "genlayer"; then
+                    echo ""
+                    print_info "Attaching to screen. Press Ctrl+A, then D to detach."
+                    sleep 2
+                    screen -r genlayer
+                fi
+                check_node_status
+                ;;
+            2)
+                if [ -d "./data/node/logs" ]; then
+                    echo ""
+                    echo -e "${CYAN}=== Recent Logs ===${NC}"
+                    ls -1 ./data/node/logs/*.log 2>/dev/null | while read logfile; do
+                        echo -e "${YELLOW}$(basename "$logfile"):${NC}"
+                        tail -n 10 "$logfile"
+                        echo ""
+                    done
+                    read -p "Press Enter to continue..."
+                else
+                    print_error "No logs directory found"
+                    sleep 2
+                fi
+                check_node_status
+                ;;
+            3)
+                echo ""
+                print_info "Checking sync progress..."
+                if timeout 5 curl -s -X POST http://localhost:9151 \
+                  -H "Content-Type: application/json" \
+                  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' > /tmp/sync_check 2>/dev/null; then
+                    
+                    BLOCK_HEX=$(cat /tmp/sync_check | jq -r '.result' 2>/dev/null || echo "null")
+                    if [ -n "$BLOCK_HEX" ] && [ "$BLOCK_HEX" != "null" ]; then
+                        BLOCK_NUMBER=$(echo $BLOCK_HEX | sed 's/0x//' | tr '[:lower:]' '[:upper:]' | xargs -I {} echo "ibase=16; {}" | bc 2>/dev/null || echo "0")
+                        echo -e "Current block: ${YELLOW}$BLOCK_NUMBER${NC}"
+                        echo "Compare with testnet explorer to check sync status"
+                    else
+                        print_error "Could not get block number"
+                    fi
+                    rm -f /tmp/sync_check
+                else
+                    print_error "RPC not responding"
+                fi
+                echo ""
+                read -p "Press Enter to continue..."
+                check_node_status
+                ;;
+            4)
+                echo ""
+                print_info "Restarting node..."
+                if screen -list 2>/dev/null | grep -q "genlayer"; then
+                    screen -S genlayer -X quit 2>/dev/null
+                    print_success "Old screen session terminated"
+                fi
+                sleep 2
+                
+                # Ensure Docker is running
+                docker compose up -d > /dev/null 2>&1
+                
+                # Load password
+                NODE_PASSWORD=$(cat .node_password)
+                
+                # Start new session
+                screen -S genlayer -d -m bash -c "./bin/genlayernode run -c $(pwd)/configs/node/config.yaml --password \"$NODE_PASSWORD\""
+                print_success "Node restarted in screen session"
+                echo ""
+                read -p "Press Enter to continue..."
+                check_node_status
+                ;;
+            5)
+                return
+                ;;
+            *)
+                print_error "Invalid option"
+                sleep 1
+                check_node_status
+                ;;
+        esac
+    fi
+}
+
+# Delete Node
+delete_node() {
+    local silent_mode=$1
+    
+    if [ "$silent_mode" != "silent" ]; then
+        display_banner
+    fi
+    
+    if ! is_node_installed; then
+        if [ "$silent_mode" != "silent" ]; then
+            print_error "GenLayer Archive Node is not installed!"
+            echo ""
+            read -p "Press Enter to return to main menu..."
+        fi
+        return
+    fi
+
+    if [ "$silent_mode" != "silent" ]; then
+        echo -e "${RED}=== WARNING: Delete GenLayer Archive Node ===${NC}"
+        echo ""
+        echo "This will permanently delete:"
+        echo "• All blockchain data"
+        echo "• Node configuration"
+        echo "• Account information"
+        echo "• Docker containers"
+        echo ""
+        echo -e "${RED}This cannot be undone!${NC}"
+        echo ""
+        echo "Type 'DELETE' to confirm:"
+        read -p "> " confirmation
+        
+        if [ "$confirmation" != "DELETE" ]; then
+            print_info "Deletion cancelled"
+            sleep 2
+            return
+        fi
+    fi
+
+    print_info "Stopping node..."
+    
+    # Kill screen session
+    if screen -list 2>/dev/null | grep -q "genlayer"; then
+        screen -S genlayer -X quit 2>/dev/null
+        print_success "Screen session terminated"
+    fi
+
+    # Remove Docker containers
+    cd "$INSTALL_DIR/genlayer-node-linux-amd64" 2>/dev/null
+    if [ -f "docker-compose.yml" ]; then
+        docker compose down > /dev/null 2>&1
+        print_success "Docker containers removed"
+    fi
+
+    # Delete files
+    print_info "Removing all files..."
+    rm -rf "$INSTALL_DIR"
+    print_success "All files deleted"
+
+    if [ "$silent_mode" != "silent" ]; then
+        echo ""
+        print_success "GenLayer Archive Node completely removed!"
+        echo ""
+        read -p "Press Enter to return to main menu..."
+    fi
+}
+
+# Main menu
+main_menu() {
+    while true; do
+        display_banner
+        
+        echo -e "${CYAN}=== Main Menu ===${NC}"
+        echo ""
+        
+        if is_node_installed; then
+            echo -e "${GREEN}Status: Installed${NC}"
+            if screen -list 2>/dev/null | grep -q "genlayer"; then
+                echo -e "${GREEN}Node: Running${NC}"
+            else
+                echo -e "${YELLOW}Node: Stopped${NC}"
+            fi
+        else
+            echo -e "${RED}Status: Not Installed${NC}"
+        fi
+        
+        echo ""
+        echo "1) Install Archive Node"
+        echo "2) Check Node Status"
+        echo "3) Delete Node"
+        echo "4) Exit"
+        echo ""
+        read -p "Select option (1-4): " choice
+
+        case $choice in
+            1)
+                install_archive_node
+                ;;
+            2)
+                check_node_status
+                ;;
+            3)
+                delete_node
+                ;;
+            4)
+                echo ""
+                echo "Thank you for using GenLayer Archive Node Setup!" | lolcat
+                echo ""
+                break
+                ;;
+            *)
+                print_error "Invalid option. Please select 1-4."
+                sleep 2
+                ;;
+        esac
+    done
+}
+
+# Start the script
+main_menu
