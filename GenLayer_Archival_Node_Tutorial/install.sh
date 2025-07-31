@@ -264,33 +264,29 @@ EOF
         print_error "Failed to start WebDriver"
     fi
 
+    # Automatically start the node
+print_info "Starting GenLayer Archive Node..."
+cd "$INSTALL_DIR/genlayer-node-linux-amd64"
+
+# Create screen session
+screen -S genlayer-archive -d -m
+
+# Send the node start command to the screen session
+screen -S genlayer-archive -X stuff "./bin/genlayernode run -c $(pwd)/configs/node/config.yaml --password \"$NODE_PASSWORD\"\n"
+
+sleep 3
+
+# Check if screen session was created and node is running
+if screen -list | grep -q "genlayer-archive"; then
+    print_success "Node started successfully in screen session 'genlayer-archive'"
     echo ""
-    print_success "Installation completed!"
-    echo ""
-    echo -e "${CYAN}=== Installation Summary ===${NC}"
-    echo -e "Installation directory: ${YELLOW}$INSTALL_DIR${NC}"
-    echo -e "Node address: ${YELLOW}$NODE_ADDRESS${NC}"
-    echo -e "Config location: ${YELLOW}$INSTALL_DIR/genlayer-node-linux-amd64/configs/node/config.yaml${NC}"
-    echo ""
-    echo -e "${CYAN}=== To start your node ===${NC}"
-    echo "1. Create a new screen session:"
-    echo -e "   ${YELLOW}screen -S genlayer-archive${NC}"
-    echo ""
-    echo "2. Navigate to the node directory:"
-    echo -e "   ${YELLOW}cd $INSTALL_DIR/genlayer-node-linux-amd64${NC}"
-    echo ""
-    echo "3. Run the node:"
-    echo -e "   ${YELLOW}./bin/genlayernode run -c \$(pwd)/configs/node/config.yaml --password \"$NODE_PASSWORD\"${NC}"
-    echo ""
-    echo "4. Detach from screen:"
-    echo -e "   Press ${YELLOW}Ctrl+A${NC}, then ${YELLOW}D${NC}"
-    echo ""
-    echo "5. To reattach to the screen:"
-    echo -e "   ${YELLOW}screen -r genlayer-archive${NC}"
-    echo ""
-    echo -e "${RED}IMPORTANT: Save your password securely!${NC}"
-    echo ""
-    read -p "Press Enter to return to main menu..."
+    echo -e "${CYAN}=== Node Management Commands ===${NC}"
+    echo -e "View node output: ${YELLOW}screen -r genlayer-archive${NC}"
+    echo -e "Detach from screen: Press ${YELLOW}Ctrl+A${NC}, then ${YELLOW}D${NC}"
+    echo -e "Stop node: Attach to screen and press ${YELLOW}Ctrl+C${NC}"
+else
+    print_error "Failed to start node in screen session"
+fi
 }
 
 # Check Node Status
