@@ -74,15 +74,32 @@ install_archive_node() {
     # Check if already installed
     if is_node_installed; then
         print_warn "GenLayer Archive Node is already installed at $INSTALL_DIR"
-        read -p "Do you want to reinstall? This will delete existing data (y/n): " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            return
-        fi
-        delete_node
+        echo ""
+        echo -e "${YELLOW}What would you like to do?${NC}"
+        echo "1) Keep existing installation"
+        echo "2) Reinstall (delete all data)"
+        echo ""
+        read -p "Select option (1-2): " reinstall_choice
+        
+        case $reinstall_choice in
+            1)
+                print_info "Keeping existing installation"
+                sleep 2
+                return
+                ;;
+            2)
+                delete_node silent
+                ;;
+            *)
+                print_error "Invalid option"
+                sleep 2
+                return
+                ;;
+        esac
     fi
 
     print_info "Starting GenLayer Archive Node installation..."
+    echo ""
     
     # Check system requirements
     print_info "Checking system requirements..."
@@ -90,23 +107,29 @@ install_archive_node() {
     # Check OS
     if [[ "$OSTYPE" != "linux-gnu"* ]]; then
         print_error "This script only supports Linux systems"
-        exit 1
+        read -p "Press Enter to return to main menu..."
+        return
     fi
 
     # Check architecture
     ARCH=$(uname -m)
     if [[ "$ARCH" != "x86_64" ]]; then
         print_error "Only AMD64 architecture is supported"
-        exit 1
+        read -p "Press Enter to return to main menu..."
+        return
     fi
 
     # Check available RAM
     TOTAL_RAM=$(free -g | awk '/^Mem:/{print $2}')
     if [ "$TOTAL_RAM" -lt 15 ]; then
         print_warn "System has less than 16GB RAM. Archive node requires at least 16GB (32GB recommended)"
-        read -p "Continue anyway? (y/n): " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        echo ""
+        echo "Continue anyway?"
+        echo "1) Yes"
+        echo "2) No"
+        read -p "Select option (1-2): " ram_choice
+        
+        if [ "$ram_choice" != "1" ]; then
             return
         fi
     fi
@@ -116,7 +139,7 @@ install_archive_node() {
     # Install dependencies
     print_info "Installing dependencies..."
     sudo apt update > /dev/null 2>&1
-    sudo apt install -y wget tar curl git screen jq net-tools > /dev/null 2>&1
+    sudo apt install -y wget tar curl git screen jq net-tools bc > /dev/null 2>&1
     print_success "Dependencies installed!"
 
     # Install Docker if not present
@@ -233,18 +256,32 @@ EOF
     print_info "Setting up node account..."
     echo ""
     echo -e "${CYAN}=== Create a secure password for your node ===${NC}"
+    echo -e "${YELLOW}Password requirements:${NC}"
+    echo "• At least 8 characters"
+    echo "• Remember this password!"
     echo ""
-    read -s -p "Enter password for node account: " NODE_PASSWORD
-    echo ""
-    read -s -p "Confirm password: " NODE_PASSWORD_CONFIRM
-    echo ""
+    
+    while true; do
+        read -s -p "Enter password: " NODE_PASSWORD
+        echo ""
+        
+        if [ ${#NODE_PASSWORD} -lt 8 ]; then
+            print_error "Password must be at least 8 characters!"
+            continue
+        fi
+        
+        read -s -p "Confirm password: " NODE_PASSWORD_CONFIRM
+        echo ""
+        
+        if [ "$NODE_PASSWORD" != "$NODE_PASSWORD_CONFIRM" ]; then
+            print_error "Passwords don't match! Try again."
+            echo ""
+        else
+            break
+        fi
+    done
 
-    if [ "$NODE_PASSWORD" != "$NODE_PASSWORD_CONFIRM" ]; then
-        print_error "Passwords do not match!"
-        exit 1
-    fi
-
-    # Save password to file (encrypted would be better, but keeping it simple)
+    # Save password to file
     echo "$NODE_PASSWORD" > .node_password
     chmod 600 .node_password
 
@@ -264,29 +301,43 @@ EOF
         print_error "Failed to start WebDriver"
     fi
 
-    # Automatically start the node
-print_info "Starting GenLayer Archive Node..."
-cd "$INSTALL_DIR/genlayer-node-linux-amd64"
-
-# Create screen session
-screen -S genlayer-archive -d -m
-
-# Send the node start command to the screen session
-screen -S genlayer-archive -X stuff "./bin/genlayernode run -c $(pwd)/configs/node/config.yaml --password \"$NODE_PASSWORD\"\n"
-
-sleep 3
-
-# Check if screen session was created and node is running
-if screen -list | grep -q "genlayer-archive"; then
-    print_success "Node started successfully in screen session 'genlayer-archive'"
     echo ""
-    echo -e "${CYAN}=== Node Management Commands ===${NC}"
-    echo -e "View node output: ${YELLOW}screen -r genlayer-archive${NC}"
-    echo -e "Detach from screen: Press ${YELLOW}Ctrl+A${NC}, then ${YELLOW}D${NC}"
-    echo -e "Stop node: Attach to screen and press ${YELLOW}Ctrl+C${NC}"
-else
-    print_error "Failed to start node in screen session"
-fi
+    print_success "Installation completed!"
+    echo ""
+    echo -e "${CYAN}=== Installation Summary ===${NC}"
+    echo -e "Directory: ${YELLOW}$INSTALL_DIR${NC}"
+    echo -e "Node Address: ${YELLOW}$NODE_ADDRESS${NC}"
+    echo ""
+    
+    # Ask to start node
+    echo -e "${CYAN}Start the node now?${NC}"
+    echo "1) Yes"
+    echo "2) No"
+    read -p "Select option (1-2): " start_choice
+    
+    if [ "$start_choice" == "1" ]; then
+        print_info "Starting GenLayer Archive Node..."
+        cd "$INSTALL_DIR/genlayer-node-linux-amd64"
+
+        # Create screen session
+        screen -S genlayer-archive -d -m
+
+        # Send the node start command
+        screen -S genlayer-archive -X stuff "./bin/genlayernode run -c $(pwd)/configs/node/config.yaml --password \"$NODE_PASSWORD\"\n"
+
+        sleep 5
+
+        if screen -list | grep -q "genlayer-archive"; then
+            print_success "Node started in screen session!"
+            echo ""
+            echo -e "${CYAN}=== Node Commands ===${NC}"
+            echo -e "View output: ${YELLOW}screen -r genlayer-archive${NC}"
+            echo -e "Detach: ${YELLOW}Ctrl+A, then D${NC}"
+        fi
+    fi
+    
+    echo ""
+    read -p "Press Enter to return to main menu..."
 }
 
 # Check Node Status
@@ -303,10 +354,14 @@ check_node_status() {
     echo -e "${CYAN}=== GenLayer Archive Node Status ===${NC}"
     echo ""
 
-    cd "$INSTALL_DIR/genlayer-node-linux-amd64"
+    cd "$INSTALL_DIR/genlayer-node-linux-amd64" 2>/dev/null || {
+        print_error "Installation directory not found"
+        read -p "Press Enter to return to main menu..."
+        return
+    }
 
-    # Check if screen session exists
-    if screen -list | grep -q "genlayer-archive"; then
+    # Check screen session
+    if screen -list 2>/dev/null | grep -q "genlayer-archive"; then
         echo -e "Node Process: ${GREEN}✓${NC} Running"
     else
         echo -e "Node Process: ${RED}✗${NC} Not running"
@@ -319,106 +374,178 @@ check_node_status() {
         echo -e "WebDriver: ${RED}✗${NC} Not running"
     fi
 
-    # Check RPC endpoint
-    BLOCK_RESPONSE=$(curl -s -X POST http://localhost:9151 \
+    # Check RPC with timeout
+    echo -n "RPC Status: "
+    if timeout 5 curl -s -X POST http://localhost:9151 \
       -H "Content-Type: application/json" \
-      -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' 2>/dev/null)
-
-    if [ -n "$BLOCK_RESPONSE" ]; then
-        BLOCK_HEX=$(echo $BLOCK_RESPONSE | jq -r '.result' 2>/dev/null)
-        if [ -n "$BLOCK_HEX" ] && [ "$BLOCK_HEX" != "null" ]; then
-            BLOCK_NUMBER=$(printf "%d" $BLOCK_HEX 2>/dev/null)
-            echo -e "RPC Status: ${GREEN}✓${NC} Active (Block: $BLOCK_NUMBER)"
-        else
-            echo -e "RPC Status: ${RED}✗${NC} Invalid response"
+      -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' > /tmp/rpc_check 2>/dev/null; then
+        
+        if [ -s /tmp/rpc_check ]; then
+            BLOCK_HEX=$(cat /tmp/rpc_check | jq -r '.result' 2>/dev/null || echo "null")
+            if [ -n "$BLOCK_HEX" ] && [ "$BLOCK_HEX" != "null" ]; then
+                BLOCK_NUMBER=$(echo $BLOCK_HEX | sed 's/0x//' | tr '[:lower:]' '[:upper:]' | xargs -I {} echo "ibase=16; {}" | bc 2>/dev/null || echo "0")
+                if [ "$BLOCK_NUMBER" != "0" ]; then
+                    echo -e "${GREEN}✓${NC} Active (Block: $BLOCK_NUMBER)"
+                else
+                    echo -e "${YELLOW}⚠${NC} Invalid block"
+                fi
+            else
+                echo -e "${RED}✗${NC} Invalid response"
+            fi
         fi
+        rm -f /tmp/rpc_check
     else
-        echo -e "RPC Status: ${RED}✗${NC} Not responding"
+        echo -e "${RED}✗${NC} Not responding"
     fi
 
-    # Check health endpoint
-    HEALTH_RESPONSE=$(curl -s http://localhost:9153/health 2>/dev/null)
-    if [ -n "$HEALTH_RESPONSE" ]; then
-        echo -e "Health API: ${GREEN}✓${NC} Responding"
+    # Check health
+    echo -n "Health API: "
+    if timeout 5 curl -s http://localhost:9153/health > /dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} Responding"
     else
-        echo -e "Health API: ${RED}✗${NC} Not responding"
+        echo -e "${RED}✗${NC} Not responding"
     fi
 
-    # Check if logs exist
+    # Check logs
     if [ -d "./data/node/logs" ] && [ "$(ls -A ./data/node/logs 2>/dev/null)" ]; then
         echo -e "Logs: ${GREEN}✓${NC} Available"
-        
-        # Show last error if any
-        LAST_ERROR=$(grep -E "ERR|ERROR" ./data/node/logs/*.log 2>/dev/null | tail -1)
-        if [ -n "$LAST_ERROR" ]; then
-            echo -e "\nLast Error:"
-            echo -e "${RED}$LAST_ERROR${NC}"
-        fi
     else
         echo -e "Logs: ${YELLOW}⚠${NC} No logs found"
     fi
 
     echo ""
-    echo -e "${CYAN}Quick Commands:${NC}"
-    echo "• View node output: screen -r genlayer-archive"
-    echo "• Check current block: curl -s -X POST http://localhost:9151 -H \"Content-Type: application/json\" -d '{\"jsonrpc\":\"2.0\",\"method\":\"eth_blockNumber\",\"params\":[],\"id\":1}' | jq -r '.result' | xargs printf '%d\n'"
-    echo "• View logs: tail -f $INSTALL_DIR/genlayer-node-linux-amd64/data/node/logs/*.log"
-    
+    echo -e "${CYAN}=== Quick Actions ===${NC}"
+    echo "1) View node output"
+    echo "2) View recent logs"
+    echo "3) Check sync progress"
+    echo "4) Return to main menu"
     echo ""
-    read -p "Press Enter to return to main menu..."
+    read -p "Select option (1-4): " action
+
+    case $action in
+        1)
+            if screen -list 2>/dev/null | grep -q "genlayer-archive"; then
+                echo ""
+                print_info "Attaching to screen. Press Ctrl+A, then D to detach."
+                sleep 2
+                screen -r genlayer-archive
+            else
+                print_error "Node not running in screen"
+                sleep 2
+            fi
+            check_node_status
+            ;;
+        2)
+            if [ -d "./data/node/logs" ]; then
+                echo ""
+                echo -e "${CYAN}=== Recent Logs ===${NC}"
+                tail -n 20 ./data/node/logs/*.log 2>/dev/null || echo "No logs available"
+                echo ""
+                read -p "Press Enter to continue..."
+            else
+                print_error "No logs directory found"
+                sleep 2
+            fi
+            check_node_status
+            ;;
+        3)
+            echo ""
+            print_info "Checking sync progress..."
+            if timeout 5 curl -s -X POST http://localhost:9151 \
+              -H "Content-Type: application/json" \
+              -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' > /tmp/sync_check 2>/dev/null; then
+                
+                BLOCK_HEX=$(cat /tmp/sync_check | jq -r '.result' 2>/dev/null || echo "null")
+                if [ -n "$BLOCK_HEX" ] && [ "$BLOCK_HEX" != "null" ]; then
+                    BLOCK_NUMBER=$(echo $BLOCK_HEX | sed 's/0x//' | tr '[:lower:]' '[:upper:]' | xargs -I {} echo "ibase=16; {}" | bc 2>/dev/null || echo "0")
+                    echo -e "Current block: ${YELLOW}$BLOCK_NUMBER${NC}"
+                    echo "Compare with testnet explorer to check sync status"
+                else
+                    print_error "Could not get block number"
+                fi
+                rm -f /tmp/sync_check
+            else
+                print_error "RPC not responding"
+            fi
+            echo ""
+            read -p "Press Enter to continue..."
+            check_node_status
+            ;;
+        4)
+            return
+            ;;
+        *)
+            print_error "Invalid option"
+            sleep 1
+            check_node_status
+            ;;
+    esac
 }
 
 # Delete Node
 delete_node() {
-    display_banner
+    local silent_mode=$1
+    
+    if [ "$silent_mode" != "silent" ]; then
+        display_banner
+    fi
     
     if ! is_node_installed; then
-        print_error "GenLayer Archive Node is not installed!"
+        if [ "$silent_mode" != "silent" ]; then
+            print_error "GenLayer Archive Node is not installed!"
+            echo ""
+            read -p "Press Enter to return to main menu..."
+        fi
+        return
+    fi
+
+    if [ "$silent_mode" != "silent" ]; then
+        echo -e "${RED}=== WARNING: Delete GenLayer Archive Node ===${NC}"
         echo ""
-        read -p "Press Enter to return to main menu..."
-        return
+        echo "This will permanently delete:"
+        echo "• All blockchain data"
+        echo "• Node configuration"
+        echo "• Account information"
+        echo "• Docker containers"
+        echo ""
+        echo -e "${RED}This cannot be undone!${NC}"
+        echo ""
+        echo "Type 'DELETE' to confirm:"
+        read -p "> " confirmation
+        
+        if [ "$confirmation" != "DELETE" ]; then
+            print_info "Deletion cancelled"
+            sleep 2
+            return
+        fi
     fi
 
-    echo -e "${RED}=== WARNING: Delete GenLayer Archive Node ===${NC}"
-    echo ""
-    echo "This will permanently delete:"
-    echo "• All node data and blockchain sync"
-    echo "• Node configuration"
-    echo "• Account information"
-    echo "• Docker containers"
-    echo ""
-    read -p "Are you sure you want to delete everything? (yes/no): " confirmation
+    print_info "Stopping node..."
     
-    if [ "$confirmation" != "yes" ]; then
-        print_info "Deletion cancelled"
-        read -p "Press Enter to return to main menu..."
-        return
-    fi
-
-    print_info "Stopping node processes..."
-    
-    # Kill screen session if exists
-    if screen -list | grep -q "genlayer-archive"; then
-        screen -S genlayer-archive -X quit
+    # Kill screen session
+    if screen -list 2>/dev/null | grep -q "genlayer-archive"; then
+        screen -S genlayer-archive -X quit 2>/dev/null
         print_success "Screen session terminated"
     fi
 
-    # Stop and remove Docker containers
+    # Remove Docker containers
     cd "$INSTALL_DIR/genlayer-node-linux-amd64" 2>/dev/null
     if [ -f "docker-compose.yml" ]; then
         docker compose down > /dev/null 2>&1
         print_success "Docker containers removed"
     fi
 
-    # Remove installation directory
-    print_info "Removing installation directory..."
+    # Delete files
+    print_info "Removing all files..."
     rm -rf "$INSTALL_DIR"
     print_success "All files deleted"
 
-    echo ""
-    print_success "GenLayer Archive Node has been completely removed!"
-    echo ""
-    read -p "Press Enter to return to main menu..."
+    if [ "$silent_mode" != "silent" ]; then
+        echo ""
+        print_success "GenLayer Archive Node completely removed!"
+        echo ""
+        read -p "Press Enter to return to main menu..."
+    fi
 }
 
 # Main menu
@@ -428,12 +555,25 @@ main_menu() {
         
         echo -e "${CYAN}=== Main Menu ===${NC}"
         echo ""
+        
+        if is_node_installed; then
+            echo -e "${GREEN}Status: Installed${NC}"
+            if screen -list 2>/dev/null | grep -q "genlayer-archive"; then
+                echo -e "${GREEN}Node: Running${NC}"
+            else
+                echo -e "${YELLOW}Node: Stopped${NC}"
+            fi
+        else
+            echo -e "${RED}Status: Not Installed${NC}"
+        fi
+        
+        echo ""
         echo "1) Install Archive Node"
         echo "2) Check Node Status"
         echo "3) Delete Node"
         echo "4) Exit"
         echo ""
-        read -p "Select an option (1-4): " choice
+        read -p "Select option (1-4): " choice
 
         case $choice in
             1)
@@ -449,7 +589,7 @@ main_menu() {
                 echo ""
                 echo "Thank you for using BlackNodes GenLayer Manager!" | lolcat
                 echo ""
-                exit 0
+                break
                 ;;
             *)
                 print_error "Invalid option. Please select 1-4."
