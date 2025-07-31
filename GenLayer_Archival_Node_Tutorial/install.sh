@@ -251,6 +251,31 @@ services:
     restart: unless-stopped
 EOF
 
+    # Ask about LLM API key
+    echo ""
+    print_info "GenLayer requires an LLM API key even for archive nodes"
+    echo ""
+    echo -e "${CYAN}Do you have a Heurist API key?${NC}"
+    echo "Get free credits at: https://dev-api-form.heurist.ai (use code: genlayer)"
+    echo ""
+    echo "1) Yes, I have an API key"
+    echo "2) No, use a dummy key (node may have limited functionality)"
+    echo ""
+    read -p "Select option (1-2): " api_choice
+    
+    if [ "$api_choice" == "1" ]; then
+        echo ""
+        read -p "Enter your Heurist API key: " HEURIST_KEY
+        echo "$HEURIST_KEY" > .heurist_key
+        chmod 600 .heurist_key
+    else
+        # Use a dummy key to prevent the error
+        HEURIST_KEY="dummy-key-for-archive-node"
+        echo "$HEURIST_KEY" > .heurist_key
+        chmod 600 .heurist_key
+        print_warn "Using dummy API key. Some features may not work properly."
+    fi
+
     # Set up node account
     echo ""
     print_info "Setting up node account..."
@@ -322,7 +347,9 @@ EOF
         # Create screen session
         screen -S genlayer-archive -d -m
 
-        # Send the node start command
+        # Send environment variable and node start command
+        screen -S genlayer-archive -X stuff "export HEURISTKEY=\"$HEURIST_KEY\"\n"
+        sleep 1
         screen -S genlayer-archive -X stuff "./bin/genlayernode run -c $(pwd)/configs/node/config.yaml --password \"$NODE_PASSWORD\"\n"
 
         sleep 5
@@ -338,6 +365,58 @@ EOF
     
     echo ""
     read -p "Press Enter to return to main menu..."
+}
+
+# Start node (for already installed nodes)
+start_node() {
+    if ! is_node_installed; then
+        print_error "Node is not installed!"
+        return 1
+    fi
+    
+    cd "$INSTALL_DIR/genlayer-node-linux-amd64"
+    
+    # Check if already running
+    if screen -list 2>/dev/null | grep -q "genlayer-archive"; then
+        print_warn "Node is already running"
+        return 0
+    fi
+    
+    # Load API key
+    if [ -f ".heurist_key" ]; then
+        HEURIST_KEY=$(cat .heurist_key)
+    else
+        print_warn "No API key found. Using dummy key."
+        HEURIST_KEY="dummy-key-for-archive-node"
+    fi
+    
+    # Load password
+    if [ -f ".node_password" ]; then
+        NODE_PASSWORD=$(cat .node_password)
+    else
+        print_error "No password file found!"
+        return 1
+    fi
+    
+    print_info "Starting node..."
+    
+    # Create screen session
+    screen -S genlayer-archive -d -m
+    
+    # Send commands
+    screen -S genlayer-archive -X stuff "export HEURISTKEY=\"$HEURIST_KEY\"\n"
+    sleep 1
+    screen -S genlayer-archive -X stuff "./bin/genlayernode run -c $(pwd)/configs/node/config.yaml --password \"$NODE_PASSWORD\"\n"
+    
+    sleep 3
+    
+    if screen -list | grep -q "genlayer-archive"; then
+        print_success "Node started successfully!"
+        return 0
+    else
+        print_error "Failed to start node"
+        return 1
+    fi
 }
 
 # Check Node Status
@@ -363,8 +442,10 @@ check_node_status() {
     # Check screen session
     if screen -list 2>/dev/null | grep -q "genlayer-archive"; then
         echo -e "Node Process: ${GREEN}✓${NC} Running"
+        NODE_RUNNING=true
     else
         echo -e "Node Process: ${RED}✗${NC} Not running"
+        NODE_RUNNING=false
     fi
 
     # Check WebDriver
@@ -415,71 +496,119 @@ check_node_status() {
 
     echo ""
     echo -e "${CYAN}=== Quick Actions ===${NC}"
-    echo "1) View node output"
-    echo "2) View recent logs"
-    echo "3) Check sync progress"
-    echo "4) Return to main menu"
-    echo ""
-    read -p "Select option (1-4): " action
-
-    case $action in
-        1)
-            if screen -list 2>/dev/null | grep -q "genlayer-archive"; then
+    
+    if [ "$NODE_RUNNING" = false ]; then
+        echo "1) Start node"
+        echo "2) View recent logs"
+        echo "3) Return to main menu"
+        echo ""
+        read -p "Select option (1-3): " action
+        
+        case $action in
+            1)
                 echo ""
-                print_info "Attaching to screen. Press Ctrl+A, then D to detach."
-                sleep 2
-                screen -r genlayer-archive
-            else
-                print_error "Node not running in screen"
-                sleep 2
-            fi
-            check_node_status
-            ;;
-        2)
-            if [ -d "./data/node/logs" ]; then
-                echo ""
-                echo -e "${CYAN}=== Recent Logs ===${NC}"
-                tail -n 20 ./data/node/logs/*.log 2>/dev/null || echo "No logs available"
+                start_node
                 echo ""
                 read -p "Press Enter to continue..."
-            else
-                print_error "No logs directory found"
-                sleep 2
-            fi
-            check_node_status
-            ;;
-        3)
-            echo ""
-            print_info "Checking sync progress..."
-            if timeout 5 curl -s -X POST http://localhost:9151 \
-              -H "Content-Type: application/json" \
-              -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' > /tmp/sync_check 2>/dev/null; then
-                
-                BLOCK_HEX=$(cat /tmp/sync_check | jq -r '.result' 2>/dev/null || echo "null")
-                if [ -n "$BLOCK_HEX" ] && [ "$BLOCK_HEX" != "null" ]; then
-                    BLOCK_NUMBER=$(echo $BLOCK_HEX | sed 's/0x//' | tr '[:lower:]' '[:upper:]' | xargs -I {} echo "ibase=16; {}" | bc 2>/dev/null || echo "0")
-                    echo -e "Current block: ${YELLOW}$BLOCK_NUMBER${NC}"
-                    echo "Compare with testnet explorer to check sync status"
+                check_node_status
+                ;;
+            2)
+                if [ -d "./data/node/logs" ]; then
+                    echo ""
+                    echo -e "${CYAN}=== Recent Logs ===${NC}"
+                    tail -n 20 ./data/node/logs/*.log 2>/dev/null || echo "No logs available"
+                    echo ""
+                    read -p "Press Enter to continue..."
                 else
-                    print_error "Could not get block number"
+                    print_error "No logs directory found"
+                    sleep 2
                 fi
-                rm -f /tmp/sync_check
-            else
-                print_error "RPC not responding"
-            fi
-            echo ""
-            read -p "Press Enter to continue..."
-            check_node_status
-            ;;
-        4)
-            return
-            ;;
-        *)
-            print_error "Invalid option"
-            sleep 1
-            check_node_status
-            ;;
-    esac
+                check_node_status
+                ;;
+            3)
+                return
+                ;;
+            *)
+                print_error "Invalid option"
+                sleep 1
+                check_node_status
+                ;;
+        esac
+    else
+        echo "1) View node output"
+        echo "2) View recent logs"
+        echo "3) Check sync progress"
+        echo "4) Restart node"
+        echo "5) Return to main menu"
+        echo ""
+        read -p "Select option (1-5): " action
+
+        case $action in
+            1)
+                if screen -list 2>/dev/null | grep -q "genlayer-archive"; then
+                    echo ""
+                    print_info "Attaching to screen. Press Ctrl+A, then D to detach."
+                    sleep 2
+                    screen -r genlayer-archive
+                fi
+                check_node_status
+                ;;
+            2)
+                if [ -d "./data/node/logs" ]; then
+                    echo ""
+                    echo -e "${CYAN}=== Recent Logs ===${NC}"
+                    tail -n 20 ./data/node/logs/*.log 2>/dev/null || echo "No logs available"
+                    echo ""
+                    read -p "Press Enter to continue..."
+                else
+                    print_error "No logs directory found"
+                    sleep 2
+                fi
+                check_node_status
+                ;;
+            3)
+                echo ""
+                print_info "Checking sync progress..."
+                if timeout 5 curl -s -X POST http://localhost:9151 \
+                  -H "Content-Type: application/json" \
+                  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' > /tmp/sync_check 2>/dev/null; then
+                    
+                    BLOCK_HEX=$(cat /tmp/sync_check | jq -r '.result' 2>/dev/null || echo "null")
+                    if [ -n "$BLOCK_HEX" ] && [ "$BLOCK_HEX" != "null" ]; then
+                        BLOCK_NUMBER=$(echo $BLOCK_HEX | sed 's/0x//' | tr '[:lower:]' '[:upper:]' | xargs -I {} echo "ibase=16; {}" | bc 2>/dev/null || echo "0")
+                        echo -e "Current block: ${YELLOW}$BLOCK_NUMBER${NC}"
+                        echo "Compare with testnet explorer to check sync status"
+                    else
+                        print_error "Could not get block number"
+                    fi
+                    rm -f /tmp/sync_check
+                else
+                    print_error "RPC not responding"
+                fi
+                echo ""
+                read -p "Press Enter to continue..."
+                check_node_status
+                ;;
+            4)
+                echo ""
+                print_info "Restarting node..."
+                screen -S genlayer-archive -X quit 2>/dev/null
+                sleep 2
+                start_node
+                echo ""
+                read -p "Press Enter to continue..."
+                check_node_status
+                ;;
+            5)
+                return
+                ;;
+            *)
+                print_error "Invalid option"
+                sleep 1
+                check_node_status
+                ;;
+        esac
+    fi
 }
 
 # Delete Node
