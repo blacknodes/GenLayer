@@ -1,6 +1,5 @@
 ## Installation Script (install.sh)
 
-```bash
 #!/bin/bash
 
 # GenLayer Archive Node Installation Script by BlackNodes
