@@ -1,7 +1,11 @@
 # GenLayer Archive Node Setup Guide
 
 This guide provides instructions for setting up a GenLayer Archive Node.
-<img width="361" height="140" alt="image" src="https://github.com/user-attachments/assets/6a3570ad-313f-4f10-9a5d-1b4ecf14ecd0" />
+
+
+<img width="722" height="280" alt="image" src="https://github.com/user-attachments/assets/6a3570ad-313f-4f10-9a5d-1b4ecf14ecd0" />
+
+
 
 ## Prerequisites
 
