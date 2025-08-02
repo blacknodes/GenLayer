@@ -1,236 +1,30 @@
 #!/bin/bash
 set -e
 
-# Colors
-RED='\033[0;31m'
+# Colors for output
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
+RED='\033[0;31m'
+YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
 
-# Installation directory
-INSTALL_DIR="$HOME/genlayer-archive-node"
+echo -e "${GREEN}=== GenLayer Archive Node Setup ===${NC}"
 
-# Function to display the animated banner
-display_banner() {
-    # Install dependencies for animation if not present
-    if ! command -v figlet &> /dev/null || ! command -v lolcat &> /dev/null; then
-        echo "Installing animation dependencies..."
-        sudo apt-get update > /dev/null 2>&1
-        
-        if ! command -v gem &> /dev/null; then
-            sudo apt-get install -y ruby-full > /dev/null 2>&1
-        fi
-        
-        if ! command -v figlet &> /dev/null; then
-            sudo apt-get install -y figlet > /dev/null 2>&1
-        fi
-        
-        if ! command -v lolcat &> /dev/null; then
-            sudo gem install lolcat > /dev/null 2>&1
-        fi
-    fi
+# Setup directory
+INSTALL_DIR=$HOME/genlayer-node
+mkdir -p $INSTALL_DIR
+cd $INSTALL_DIR
 
-    clear
-    figlet -f slant "GenLayer" | lolcat
-    figlet -f digital "Archive Node Setup" | lolcat
-    echo ""
-    echo "========================================================================" | lolcat
-    echo ""
-}
+# Download and extract
+VERSION="v0.3.6"
+echo -e "${YELLOW}Downloading GenLayer node version $VERSION...${NC}"
+wget -q --show-progress https://storage.googleapis.com/gh-af/genlayer-node/bin/amd64/${VERSION}/genlayer-node-linux-amd64-${VERSION}.tar.gz
+tar -xzf genlayer-node-linux-amd64-${VERSION}.tar.gz
+cd genlayer-node-linux-amd64
 
-# Print functions
-print_info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
-}
-
-print_warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
-}
-
-print_error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-}
-
-print_success() {
-    echo -e "${GREEN}[SUCCESS]${NC} $1"
-}
-
-# Check if node is installed
-is_node_installed() {
-    if [ -d "$INSTALL_DIR/genlayer-node-linux-amd64" ] && [ -f "$INSTALL_DIR/genlayer-node-linux-amd64/bin/genlayernode" ]; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-# Check and install dependencies
-check_dependencies() {
-    print_info "Checking and installing dependencies..."
-    
-    # Update package lists
-    sudo apt-get update > /dev/null 2>&1
-    
-    # Install basic dependencies
-    PACKAGES_TO_INSTALL=""
-    
-    if ! command -v wget &> /dev/null; then
-        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL wget"
-    fi
-    
-    if ! command -v curl &> /dev/null; then
-        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL curl"
-    fi
-    
-    if ! command -v jq &> /dev/null; then
-        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL jq"
-    fi
-    
-    if ! command -v screen &> /dev/null; then
-        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL screen"
-    fi
-    
-    if ! command -v bc &> /dev/null; then
-        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL bc"
-    fi
-    
-    # Install Docker if not present
-    if ! command -v docker &> /dev/null; then
-        print_info "Docker not found. Installing Docker..."
-        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL docker.io"
-    fi
-    
-    # Install docker-compose if not present
-    if ! command -v docker-compose &> /dev/null; then
-        print_info "Docker Compose not found. Installing docker-compose..."
-        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL docker-compose"
-    fi
-    
-    # Install packages if needed
-    if [ ! -z "$PACKAGES_TO_INSTALL" ]; then
-        print_info "Installing required packages: $PACKAGES_TO_INSTALL"
-        sudo apt-get install -y $PACKAGES_TO_INSTALL > /dev/null 2>&1
-    fi
-    
-    # Make sure Docker service is running
-    if ! sudo systemctl is-active --quiet docker; then
-        print_info "Starting Docker service..."
-        sudo systemctl start docker
-    fi
-    
-    # Add current user to Docker group if not already
-    if ! groups | grep -q docker; then
-        print_info "Adding user to Docker group..."
-        sudo usermod -aG docker $USER
-        print_warn "You may need to log out and back in for group changes to take effect"
-    fi
-    
-    print_success "All dependencies installed and configured!"
-}
-
-# Stop existing services
-stop_services() {
-    print_info "Stopping any existing GenLayer services..."
-    
-    # Stop systemd service if it exists
-    if systemctl is-active --quiet genlayer-archive; then
-        sudo systemctl stop genlayer-archive
-        print_success "Stopped genlayer-archive service"
-    fi
-    
-    # Stop any running GenLayer nodes
-    pkill -f genlayernode 2>/dev/null || true
-    pkill -f genvm-modules 2>/dev/null || true
-    
-    # If installation directory exists, stop Docker containers
-    if [ -d "$INSTALL_DIR/genlayer-node-linux-amd64" ]; then
-        cd "$INSTALL_DIR/genlayer-node-linux-amd64"
-        if [ -f "docker-compose.yml" ]; then
-            docker-compose down 2>/dev/null || true
-        fi
-        cd - > /dev/null
-    fi
-    
-    print_success "All existing services stopped"
-}
-
-# Install Archive Node
-install_archive_node() {
-    display_banner
-    
-    # Check if already installed
-    if is_node_installed; then
-        print_warn "GenLayer Archive Node is already installed at $INSTALL_DIR"
-        echo ""
-        echo -e "${YELLOW}What would you like to do?${NC}"
-        echo "1) Keep existing installation"
-        echo "2) Reinstall (delete all data)"
-        echo ""
-        read -p "Select option (1-2): " reinstall_choice
-        
-        case $reinstall_choice in
-            1)
-                print_info "Keeping existing installation"
-                sleep 2
-                return
-                ;;
-            2)
-                delete_node silent
-                ;;
-            *)
-                print_error "Invalid option"
-                sleep 2
-                return
-                ;;
-        esac
-    fi
-
-    print_info "Starting GenLayer Archive Node installation..."
-    echo ""
-    
-    # Check system requirements
-    print_info "Checking system requirements..."
-
-    # Check available RAM
-    TOTAL_RAM=$(free -g | awk '/^Mem:/{print $2}')
-    if [ "$TOTAL_RAM" -lt 15 ]; then
-        print_warn "System has less than 16GB RAM. Archive node requires at least 16GB RAM (32GB recommended)"
-        echo ""
-        echo "Continue anyway?"
-        echo "1) Yes"
-        echo "2) No"
-        read -p "Select option (1-2): " ram_choice
-        
-        if [ "$ram_choice" != "1" ]; then
-            return
-        fi
-    fi
-
-    # Check dependencies
-    check_dependencies
-
-    # Create working directory
-    print_info "Creating installation directory at $INSTALL_DIR"
-    mkdir -p "$INSTALL_DIR"
-    cd "$INSTALL_DIR"
-
-    # Download node software
-    VERSION="v0.3.6"
-    print_info "Downloading GenLayer node version $VERSION..."
-    wget -q --show-progress https://storage.googleapis.com/gh-af/genlayer-node/bin/amd64/${VERSION}/genlayer-node-linux-amd64-${VERSION}.tar.gz
-    
-    print_info "Extracting archive..."
-    tar -xzf genlayer-node-linux-amd64-${VERSION}.tar.gz
-    cd genlayer-node-linux-amd64
-    
-    print_success "Node software downloaded and extracted!"
-
-    # Create configuration
-    print_info "Creating archive node configuration..."
-    mkdir -p configs/node
-    cat > configs/node/config.yaml << 'EOF'
+# Create config
+echo -e "${YELLOW}Creating configuration...${NC}"
+mkdir -p configs/node
+cat > configs/node/config.yaml << 'EOF'
 rollup:
   zksyncurl: "https://genlayer-testnet.rpc.caldera.xyz/http"
   zksyncwebsocketurl: "wss://genlayer-testnet.rpc.caldera.xyz/ws"
@@ -297,9 +91,9 @@ merkletree:
   dbpath: "./data/node/merkle/tree/"
 EOF
 
-    # Create Docker Compose file
-    print_info "Setting up Docker Compose..."
-    cat > docker-compose.yml << 'EOF'
+# Create Docker Compose file with specific image
+echo -e "${YELLOW}Setting up Docker Compose...${NC}"
+cat > docker-compose.yml << 'EOF'
 version: '3.8'
 services:
   webdriver-container:
@@ -309,50 +103,20 @@ services:
     restart: unless-stopped
 EOF
 
-    # Run precompilation (optional but recommended)
-    print_info "Running precompilation step (this may take some time)..."
-    ./third_party/genvm/bin/genvm precompile
+# Create account
+echo -e "${YELLOW}Creating node account...${NC}"
+PASSWORD="YOUR_PASSWORD_HERE" # Replace with your desired password (min 8 chars)
+echo "$PASSWORD" > .node_password
+chmod 600 .node_password
+./bin/genlayernode account new -c $(pwd)/configs/node/config.yaml --password "$PASSWORD"
 
-    # Set up node account
-    print_info "Creating node account..."
-    echo ""
-    echo -e "${YELLOW}Please enter a password for your node account (minimum 8 characters):${NC}"
-    
-    while true; do
-        read -s NODE_PASSWORD
-        echo ""
-        
-        if [ ${#NODE_PASSWORD} -lt 8 ]; then
-            print_error "Password must be at least 8 characters! Try again."
-            continue
-        fi
-        
-        break
-    done
+# Run precompilation
+echo -e "${YELLOW}Running precompilation...${NC}"
+./third_party/genvm/bin/genvm precompile
 
-    # Save password to file
-    echo "$NODE_PASSWORD" > .node_password
-    chmod 600 .node_password
-
-    # Create account
-    ./bin/genlayernode account new -c $(pwd)/configs/node/config.yaml --password "$NODE_PASSWORD" > account_info.txt 2>&1
-    NODE_ADDRESS=$(grep "New address:" account_info.txt | awk '{print $3}')
-    print_success "Node account created: $NODE_ADDRESS"
-    
-    # Start WebDriver
-    print_info "Starting WebDriver container..."
-    docker-compose up -d
-    sleep 5
-
-    if docker ps | grep -q genlayer-node-webdriver; then
-        print_success "WebDriver started successfully"
-    else
-        print_error "Failed to start WebDriver. Continuing anyway..."
-    fi
-
-    # Create systemd service file
-    print_info "Creating systemd service..."
-    sudo bash -c "cat > /etc/systemd/system/genlayer-archive.service << EOF
+# Create service file
+echo -e "${YELLOW}Creating systemd service...${NC}"
+sudo bash -c "cat > /etc/systemd/system/genlayer-archive.service << EOF
 [Unit]
 Description=GenLayer Archive Node
 After=network.target docker.service
@@ -370,7 +134,7 @@ Environment=\"IOINTELLIGENCE_API_KEY=dummy-key\"
 ExecStartPre=/usr/bin/docker-compose up -d
 
 # Then start the node
-ExecStart=$INSTALL_DIR/genlayer-node-linux-amd64/bin/genlayernode run -c $INSTALL_DIR/genlayer-node-linux-amd64/configs/node/config.yaml --password \"$NODE_PASSWORD\"
+ExecStart=$INSTALL_DIR/genlayer-node-linux-amd64/bin/genlayernode run -c $INSTALL_DIR/genlayer-node-linux-amd64/configs/node/config.yaml --password \"$PASSWORD\"
 
 # Restart policy
 Restart=on-failure
@@ -380,14 +144,10 @@ RestartSec=10s
 WantedBy=multi-user.target
 EOF"
 
-    # Create helper scripts
-    print_info "Creating helper scripts..."
-    
-    # Script to check status
-    cat > check-status.sh << EOF
+# Create helper script for status checking
+echo -e "${YELLOW}Creating status checker script...${NC}"
+cat > check-status.sh << 'EOF'
 #!/bin/bash
-cd "$INSTALL_DIR/genlayer-node-linux-amd64"
-
 echo -e "\033[0;32m=== GenLayer Node Status ===\033[0m"
 
 # Check if service is running
@@ -398,7 +158,7 @@ else
 fi
 
 # Check if Docker container is running
-if docker ps | grep -q genlayer-node-webdriver; then
+if docker ps | grep -q webdriver; then
     echo -e "WebDriver: \033[0;32mRunning\033[0m"
 else
     echo -e "WebDriver: \033[0;31mNot running\033[0m"
@@ -406,415 +166,33 @@ fi
 
 # Check RPC endpoint
 echo -n "RPC Status: "
-if curl -s -X POST http://localhost:9151 \\
-  -H "Content-Type: application/json" \\
+if curl -s -X POST http://localhost:9151 \
+  -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | grep -q "result"; then
   
-  BLOCK=\$(curl -s -X POST http://localhost:9151 \\
-    -H "Content-Type: application/json" \\
-    -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | \\
+  BLOCK=$(curl -s -X POST http://localhost:9151 \
+    -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' | \
     grep -o '"result":"[^"]*"' | cut -d'"' -f4 | sed 's/0x//')
   
-  if [ -n "\$BLOCK" ]; then
-    DECIMAL_BLOCK=\$((16#\$BLOCK))
-    echo -e "\033[0;32mResponding\033[0m (Block: \$DECIMAL_BLOCK)"
+  if [ -n "$BLOCK" ]; then
+    DECIMAL_BLOCK=$((16#$BLOCK))
+    echo -e "\033[0;32mResponding\033[0m (Block: $DECIMAL_BLOCK)"
   else
     echo -e "\033[0;32mResponding\033[0m"
   fi
 else
   echo -e "\033[0;31mNot responding\033[0m"
 fi
-
-echo ""
 EOF
-    chmod +x check-status.sh
-    
-    # Script to view logs
-    cat > view-logs.sh << EOF
-#!/bin/bash
-cd "$INSTALL_DIR/genlayer-node-linux-amd64"
+chmod +x check-status.sh
 
-echo -e "\033[0;32m=== Service Logs ===\033[0m"
-journalctl -u genlayer-archive -n 50 --no-pager
+# Enable and start service
+echo -e "${YELLOW}Enabling and starting service...${NC}"
+sudo systemctl daemon-reload
+sudo systemctl enable genlayer-archive
+sudo systemctl start genlayer-archive
 
-if [ -d "./data/node/logs" ]; then
-  echo -e "\033[0;32m=== File Logs ===\033[0m"
-  ls -1 ./data/node/logs/*.log 2>/dev/null | while read logfile; do
-    echo -e "\033[1;33m\$(basename "\$logfile"):\033[0m"
-    tail -n 10 "\$logfile"
-    echo ""
-  done
-fi
-EOF
-    chmod +x view-logs.sh
-    
-    # Enable and start the service
-    print_info "Enabling and starting systemd service..."
-    sudo systemctl daemon-reload
-    sudo systemctl enable genlayer-archive
-    sudo systemctl start genlayer-archive
-    sleep 5
-    
-    # Check if service started successfully
-    if systemctl is-active --quiet genlayer-archive; then
-        print_success "Service started successfully!"
-    else
-        print_error "Service failed to start. Check logs with 'journalctl -u genlayer-archive'"
-    fi
-
-    echo ""
-    print_success "Installation completed!"
-    echo ""
-    echo -e "${CYAN}=== Installation Summary ===${NC}"
-    echo -e "Directory: ${YELLOW}$INSTALL_DIR${NC}"
-    echo -e "Node Address: ${YELLOW}$NODE_ADDRESS${NC}"
-    echo -e "Service Name: ${YELLOW}genlayer-archive${NC}"
-    echo ""
-    echo -e "${CYAN}=== Commands ===${NC}"
-    echo -e "Check status: ${YELLOW}./check-status.sh${NC} or ${YELLOW}systemctl status genlayer-archive${NC}"
-    echo -e "View logs: ${YELLOW}./view-logs.sh${NC} or ${YELLOW}journalctl -u genlayer-archive -f${NC}"
-    echo -e "Start service: ${YELLOW}systemctl start genlayer-archive${NC}"
-    echo -e "Stop service: ${YELLOW}systemctl stop genlayer-archive${NC}"
-    echo -e "Restart service: ${YELLOW}systemctl restart genlayer-archive${NC}"
-    echo ""
-    
-    read -p "Press Enter to return to main menu..."
-}
-
-# Check Node Status
-check_node_status() {
-    display_banner
-    
-    if ! is_node_installed; then
-        print_error "GenLayer Archive Node is not installed!"
-        echo ""
-        read -p "Press Enter to return to main menu..."
-        return
-    fi
-
-    echo -e "${CYAN}=== GenLayer Archive Node Status ===${NC}"
-    echo ""
-
-    cd "$INSTALL_DIR/genlayer-node-linux-amd64" 2>/dev/null || {
-        print_error "Installation directory not found"
-        read -p "Press Enter to return to main menu..."
-        return
-    }
-
-    # Check if service is running
-    if systemctl is-active --quiet genlayer-archive; then
-        echo -e "Service: ${GREEN}✓${NC} Running"
-        NODE_RUNNING=true
-    else
-        echo -e "Service: ${RED}✗${NC} Not running"
-        NODE_RUNNING=false
-    fi
-
-    # Check WebDriver
-    if docker ps 2>/dev/null | grep -q genlayer-node-webdriver; then
-        echo -e "WebDriver: ${GREEN}✓${NC} Running"
-    else
-        echo -e "WebDriver: ${RED}✗${NC} Not running"
-    fi
-
-    # Check RPC with timeout
-    echo -n "RPC Status: "
-    if timeout 5 curl -s -X POST http://localhost:9151 \
-      -H "Content-Type: application/json" \
-      -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' > /tmp/rpc_check 2>/dev/null; then
-        
-        if [ -s /tmp/rpc_check ]; then
-            BLOCK_HEX=$(cat /tmp/rpc_check | jq -r '.result' 2>/dev/null || echo "null")
-            if [ -n "$BLOCK_HEX" ] && [ "$BLOCK_HEX" != "null" ]; then
-                BLOCK_NUMBER=$(echo $BLOCK_HEX | sed 's/0x//' | tr '[:lower:]' '[:upper:]' | xargs -I {} echo "ibase=16; {}" | bc 2>/dev/null || echo "0")
-                if [ "$BLOCK_NUMBER" != "0" ]; then
-                    echo -e "${GREEN}✓${NC} Active (Block: $BLOCK_NUMBER)"
-                else
-                    echo -e "${YELLOW}⚠${NC} Invalid block"
-                fi
-            else
-                echo -e "${RED}✗${NC} Invalid response"
-            fi
-        else
-            echo -e "${RED}✗${NC} Empty response"
-        fi
-        rm -f /tmp/rpc_check
-    else
-        echo -e "${RED}✗${NC} Not responding"
-    fi
-
-    # Check logs
-    if [ -d "./data/node/logs" ] && [ "$(ls -A ./data/node/logs 2>/dev/null)" ]; then
-        echo -e "Logs: ${GREEN}✓${NC} Available"
-    else
-        echo -e "Logs: ${YELLOW}⚠${NC} No logs found"
-    fi
-
-    echo ""
-    echo -e "${CYAN}=== Quick Actions ===${NC}"
-    
-    if [ "$NODE_RUNNING" = false ]; then
-        echo "1) Start service"
-        echo "2) View logs"
-        echo "3) Return to main menu"
-        echo ""
-        read -p "Select option (1-3): " action
-        
-        case $action in
-            1)
-                echo ""
-                print_info "Starting service..."
-                sudo systemctl start genlayer-archive
-                sleep 3
-                
-                if systemctl is-active --quiet genlayer-archive; then
-                    print_success "Service started successfully!"
-                else
-                    print_error "Service failed to start. Check logs with 'journalctl -u genlayer-archive'"
-                fi
-                
-                echo ""
-                read -p "Press Enter to continue..."
-                check_node_status
-                ;;
-            2)
-                echo ""
-                echo -e "${CYAN}=== Service Logs ===${NC}"
-                sudo journalctl -u genlayer-archive -n 50 --no-pager
-                
-                if [ -d "./data/node/logs" ]; then
-                    echo ""
-                    echo -e "${CYAN}=== File Logs ===${NC}"
-                    ls -1 ./data/node/logs/*.log 2>/dev/null | while read logfile; do
-                        echo -e "${YELLOW}$(basename "$logfile"):${NC}"
-                        tail -n 10 "$logfile"
-                        echo ""
-                    done
-                fi
-                
-                read -p "Press Enter to continue..."
-                check_node_status
-                ;;
-            3)
-                return
-                ;;
-            *)
-                print_error "Invalid option"
-                sleep 1
-                check_node_status
-                ;;
-        esac
-    else
-        echo "1) View logs"
-        echo "2) Check sync progress"
-        echo "3) Restart service"
-        echo "4) Stop service"
-        echo "5) Return to main menu"
-        echo ""
-        read -p "Select option (1-5): " action
-
-        case $action in
-            1)
-                echo ""
-                echo -e "${CYAN}=== Service Logs ===${NC}"
-                sudo journalctl -u genlayer-archive -n 50 --no-pager
-                
-                if [ -d "./data/node/logs" ]; then
-                    echo ""
-                    echo -e "${CYAN}=== File Logs ===${NC}"
-                    ls -1 ./data/node/logs/*.log 2>/dev/null | while read logfile; do
-                        echo -e "${YELLOW}$(basename "$logfile"):${NC}"
-                        tail -n 10 "$logfile"
-                        echo ""
-                    done
-                fi
-                
-                read -p "Press Enter to continue..."
-                check_node_status
-                ;;
-            2)
-                echo ""
-                print_info "Checking sync progress..."
-                if timeout 5 curl -s -X POST http://localhost:9151 \
-                  -H "Content-Type: application/json" \
-                  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}' > /tmp/sync_check 2>/dev/null; then
-                    
-                    BLOCK_HEX=$(cat /tmp/sync_check | jq -r '.result' 2>/dev/null || echo "null")
-                    if [ -n "$BLOCK_HEX" ] && [ "$BLOCK_HEX" != "null" ]; then
-                        BLOCK_NUMBER=$(echo $BLOCK_HEX | sed 's/0x//' | tr '[:lower:]' '[:upper:]' | xargs -I {} echo "ibase=16; {}" | bc 2>/dev/null || echo "0")
-                        echo -e "Current block: ${YELLOW}$BLOCK_NUMBER${NC}"
-                        echo "Compare with testnet explorer to check sync status"
-                    else
-                        print_error "Could not get block number"
-                    fi
-                    rm -f /tmp/sync_check
-                else
-                    print_error "RPC not responding"
-                fi
-                echo ""
-                read -p "Press Enter to continue..."
-                check_node_status
-                ;;
-            3)
-                echo ""
-                print_info "Restarting service..."
-                sudo systemctl restart genlayer-archive
-                sleep 3
-                
-                if systemctl is-active --quiet genlayer-archive; then
-                    print_success "Service restarted successfully!"
-                else
-                    print_error "Service failed to restart. Check logs with 'journalctl -u genlayer-archive'"
-                fi
-                
-                echo ""
-                read -p "Press Enter to continue..."
-                check_node_status
-                ;;
-            4)
-                echo ""
-                print_info "Stopping service..."
-                sudo systemctl stop genlayer-archive
-                sleep 2
-                print_success "Service stopped"
-                echo ""
-                read -p "Press Enter to continue..."
-                check_node_status
-                ;;
-            5)
-                return
-                ;;
-            *)
-                print_error "Invalid option"
-                sleep 1
-                check_node_status
-                ;;
-        esac
-    fi
-}
-
-# Delete Node
-delete_node() {
-    local silent_mode=$1
-    
-    if [ "$silent_mode" != "silent" ]; then
-        display_banner
-    fi
-    
-    if ! is_node_installed; then
-        if [ "$silent_mode" != "silent" ]; then
-            print_error "GenLayer Archive Node is not installed!"
-            echo ""
-            read -p "Press Enter to return to main menu..."
-        fi
-        return
-    fi
-
-    if [ "$silent_mode" != "silent" ]; then
-        echo -e "${RED}=== WARNING: Delete GenLayer Archive Node ===${NC}"
-        echo ""
-        echo "This will permanently delete:"
-        echo "• All blockchain data"
-        echo "• Node configuration"
-        echo "• Account information"
-        echo "• Docker containers"
-        echo "• Systemd service"
-        echo ""
-        echo -e "${RED}This cannot be undone!${NC}"
-        echo ""
-        echo "Type 'DELETE' to confirm:"
-        read -p "> " confirmation
-        
-        if [ "$confirmation" != "DELETE" ]; then
-            print_info "Deletion cancelled"
-            sleep 2
-            return
-        fi
-    fi
-
-    print_info "Stopping service..."
-    sudo systemctl stop genlayer-archive 2>/dev/null || true
-    sudo systemctl disable genlayer-archive 2>/dev/null || true
-    sudo rm -f /etc/systemd/system/genlayer-archive.service
-    sudo systemctl daemon-reload
-    print_success "Service removed"
-    
-    # Kill screen session
-    if screen -list 2>/dev/null | grep -q "genlayer"; then
-        screen -S genlayer -X quit 2>/dev/null
-        print_success "Screen session terminated"
-    fi
-
-    # Remove Docker containers
-    cd "$INSTALL_DIR/genlayer-node-linux-amd64" 2>/dev/null
-    if [ -f "docker-compose.yml" ]; then
-        docker-compose down > /dev/null 2>&1
-        print_success "Docker containers removed"
-    fi
-
-    # Delete files
-    print_info "Removing all files..."
-    rm -rf "$INSTALL_DIR"
-    print_success "All files deleted"
-
-    if [ "$silent_mode" != "silent" ]; then
-        echo ""
-        print_success "GenLayer Archive Node completely removed!"
-        echo ""
-        read -p "Press Enter to return to main menu..."
-    fi
-}
-
-# Main menu
-main_menu() {
-    while true; do
-        display_banner
-        
-        echo -e "${CYAN}=== Main Menu ===${NC}"
-        echo ""
-        
-        if is_node_installed; then
-            echo -e "${GREEN}Status: Installed${NC}"
-            if systemctl is-active --quiet genlayer-archive; then
-                echo -e "${GREEN}Service: Running${NC}"
-            else
-                echo -e "${YELLOW}Service: Stopped${NC}"
-            fi
-        else
-            echo -e "${RED}Status: Not Installed${NC}"
-        fi
-        
-        echo ""
-        echo "1) Install Archive Node"
-        echo "2) Check Node Status"
-        echo "3) Delete Node"
-        echo "4) Exit"
-        echo ""
-        read -p "Select option (1-4): " choice
-
-        case $choice in
-            1)
-                install_archive_node
-                ;;
-            2)
-                check_node_status
-                ;;
-            3)
-                delete_node
-                ;;
-            4)
-                echo ""
-                echo "Thank you for using GenLayer Archive Node Setup!" | lolcat
-                echo ""
-                break
-                ;;
-            *)
-                print_error "Invalid option. Please select 1-4."
-                sleep 2
-                ;;
-        esac
-    done
-}
-
-# Start the script
-main_menu
+echo -e "${GREEN}GenLayer Archive Node setup complete!${NC}"
+echo "To check status: ./check-status.sh"
+echo "To view logs: journalctl -u genlayer-archive -f"
