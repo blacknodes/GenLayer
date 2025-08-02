@@ -96,6 +96,10 @@ check_dependencies() {
         PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL bc"
     fi
     
+    if ! command -v lz4 &> /dev/null; then
+        PACKAGES_TO_INSTALL="$PACKAGES_TO_INSTALL liblz4-tool"
+    fi
+    
     # Install Docker if not present
     if ! command -v docker &> /dev/null; then
         print_info "Docker not found. Installing Docker..."
@@ -156,8 +160,38 @@ stop_services() {
     print_success "All existing services stopped"
 }
 
+# Apply snapshot
+apply_snapshot() {
+    print_info "Applying GenLayer snapshot..."
+    
+    # Stop the service
+    systemctl stop genlayer-archive.service 2>/dev/null || true
+    
+    # Remove existing database
+    rm -rf $HOME/genlayer-node/genlayer-node-linux-amd64/data/node/genlayer.db
+    
+    # Download snapshot
+    wget -O genlayer_snapshot.tar.lz4 http://167.235.0.153/genlayer/genlayer-archive.tar.lz4
+    
+    # Create directory if needed
+    mkdir -p $HOME/genlayer-node/genlayer-node-linux-amd64/data/node
+    
+    # Extract snapshot
+    lz4 -cd genlayer_snapshot.tar.lz4 | tar xf - -C $HOME/genlayer-node/genlayer-node-linux-amd64/data/node
+    
+    # Clean up
+    rm -f genlayer_snapshot.tar.lz4
+    
+    # Start the service
+    systemctl start genlayer-archive.service
+    
+    print_success "Snapshot applied successfully!"
+}
+
 # Install Archive Node
 install_archive_node() {
+    local with_snapshot=$1
+    
     display_banner
     
     # Check if already installed
@@ -173,6 +207,11 @@ install_archive_node() {
         case $reinstall_choice in
             1)
                 print_info "Keeping existing installation"
+                if [ "$with_snapshot" = "true" ]; then
+                    echo ""
+                    print_info "Applying snapshot to existing installation..."
+                    apply_snapshot
+                fi
                 sleep 2
                 return
                 ;;
@@ -187,7 +226,11 @@ install_archive_node() {
         esac
     fi
 
-    print_info "Starting GenLayer Archive Node installation..."
+    if [ "$with_snapshot" = "true" ]; then
+        print_info "Starting GenLayer Archive Node installation with snapshot..."
+    else
+        print_info "Starting GenLayer Archive Node installation..."
+    fi
     echo ""
     
     # Check system requirements
@@ -498,6 +541,25 @@ EOF
     sudo systemctl start genlayer-archive
     sleep 5
     
+    # Apply snapshot if requested
+    if [ "$with_snapshot" = "true" ]; then
+        print_info "Stopping service to apply snapshot..."
+        sudo systemctl stop genlayer-archive
+        
+        print_info "Applying snapshot (this will overwrite the database)..."
+        rm -rf ./data/node/genlayer.db
+        wget -O genlayer_snapshot.tar.lz4 http://167.235.0.153/genlayer/genlayer-archive.tar.lz4
+        mkdir -p ./data/node
+        lz4 -cd genlayer_snapshot.tar.lz4 | tar xf - -C ./data/node
+        rm -f genlayer_snapshot.tar.lz4
+        
+        print_info "Starting service with snapshot data..."
+        sudo systemctl start genlayer-archive
+        sleep 5
+        
+        print_success "Snapshot applied successfully!"
+    fi
+    
     # Check if service started successfully
     if systemctl is-active --quiet genlayer-archive; then
         print_success "Service started successfully!"
@@ -512,6 +574,9 @@ EOF
     echo -e "Directory: ${YELLOW}$INSTALL_DIR${NC}"
     echo -e "Node Address: ${YELLOW}$NODE_ADDRESS${NC}"
     echo -e "Service Name: ${YELLOW}genlayer-archive${NC}"
+    if [ "$with_snapshot" = "true" ]; then
+        echo -e "Snapshot: ${GREEN}Applied${NC}"
+    fi
     echo ""
     echo -e "${CYAN}=== Management Commands ===${NC}"
     echo -e "Check status: ${YELLOW}./check-status.sh${NC}"
@@ -663,30 +728,34 @@ main_menu() {
         
         echo ""
         echo "1) Install Archive Node"
-        echo "2) Check Node Status"
-        echo "3) Delete Node"
-        echo "4) Exit"
+        echo "2) Install Archive Node with Snapshot"
+        echo "3) Check Node Status"
+        echo "4) Delete Node"
+        echo "5) Exit"
         echo ""
-        read -p "Select option (1-4): " choice
+        read -p "Select option (1-5): " choice
 
         case $choice in
             1)
-                install_archive_node
+                install_archive_node false
                 ;;
             2)
-                check_node_status
+                install_archive_node true
                 ;;
             3)
-                delete_node
+                check_node_status
                 ;;
             4)
+                delete_node
+                ;;
+            5)
                 echo ""
                 echo "Thank you for using GenLayer Archive Node Setup!" | lolcat
                 echo ""
                 break
                 ;;
             *)
-                print_error "Invalid option. Please select 1-4."
+                print_error "Invalid option. Please select 1-5."
                 sleep 2
                 ;;
         esac
