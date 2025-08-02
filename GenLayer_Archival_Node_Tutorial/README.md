@@ -27,7 +27,7 @@ This guide provides instructions for setting up a GenLayer Archive Node.
 Run this command for automated installation:
 
 ```bash
-bash <(curl -s https://raw.githubusercontent.com/blacknodes/GenLayer/refs/heads/main/GenLayer_Archival_Node_Tutorial/install.sh)
+bash <(curl -s https://raw.githubusercontent.com/blacknodes/GenLayer/main/GenLayer_Archival_Node_Tutorial/install.sh)
 ```
 
 ## Manual Installation
