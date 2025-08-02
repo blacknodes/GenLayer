@@ -171,7 +171,7 @@ apply_snapshot() {
     rm -rf $HOME/genlayer-node/genlayer-node-linux-amd64/data/node/genlayer.db
     
     # Download snapshot
-    wget -O genlayer_snapshot.tar.lz4 http://167.235.0.153/genlayer/genlayer-archive.tar.lz4
+    wget -O genlayer_snapshot.tar.lz4 https://files5.blacknodes.net/genlayer/genlayer-archive.tar.lz4
     
     # Create directory if needed
     mkdir -p $HOME/genlayer-node/genlayer-node-linux-amd64/data/node
@@ -548,7 +548,7 @@ EOF
         
         print_info "Applying snapshot (this will overwrite the database)..."
         rm -rf ./data/node/genlayer.db
-        wget -O genlayer_snapshot.tar.lz4 http://167.235.0.153/genlayer/genlayer-archive.tar.lz4
+        wget -O genlayer_snapshot.tar.lz4 https://files5.blacknodes.net/genlayer/genlayer-archive.tar.lz4
         mkdir -p ./data/node
         lz4 -cd genlayer_snapshot.tar.lz4 | tar xf - -C ./data/node
         rm -f genlayer_snapshot.tar.lz4
