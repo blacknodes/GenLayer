@@ -29,6 +29,8 @@ Run this command for automated installation:
 ```bash
 bash <(curl -s https://raw.githubusercontent.com/blacknodes/GenLayer/main/GenLayer_Archival_Node_Tutorial/install.sh)
 ```
+Wait for atleast first 5-10 minutes after the node is installed, let it bootstrap and ignore all the errors in the first few minutes!
+RPC would not respond in first few miutes which is OK
 
 ## Manual Installation
 
@@ -201,6 +203,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable genlayer-archive
 sudo systemctl start genlayer-archive
 ```
+Wait for atleast first 5-10 minutes after the node is installed, let it bootstrap and ignore all the errors in the first few minutes!
+RPC would not respond in first few miutes which is OK
 
 ### Step 6: Create Helper Scripts
 
@@ -309,6 +313,8 @@ If not running, start it:
 cd ~/genlayer-node/genlayer-node-linux-amd64
 docker-compose up -d
 ```
+Restart the webdriver if this error ```Failed to execute root command error="test genvm: error running contract" ``` is not autofixed in first few minutes
+```docker restart genlayer-node-linux-amd64_webdriver-container_1```
 
 ### LLM module errors
 If you see errors related to the LLM module, ensure all environment variables are set:
@@ -323,9 +329,6 @@ export IOINTELLIGENCE_API_KEY="dummy-key"
 journalctl -u genlayer-archive -n 100
 ```
 
-## License
-
-[MIT](LICENSE)
 
 ## Disclaimer
 
