@@ -260,7 +260,7 @@ install_archive_node() {
     cd "$INSTALL_DIR"
 
     # Download node software
-    VERSION="v0.3.6"
+    VERSION="v0.3.9"
     print_info "Downloading GenLayer node version $VERSION..."
     wget -q --show-progress https://storage.googleapis.com/gh-af/genlayer-node/bin/amd64/${VERSION}/genlayer-node-linux-amd64-${VERSION}.tar.gz
     
