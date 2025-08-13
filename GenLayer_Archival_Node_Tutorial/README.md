@@ -61,7 +61,7 @@ mkdir -p ~/genlayer-node
 cd ~/genlayer-node
 
 # Download and extract GenLayer node
-VERSION="v0.3.6"
+VERSION="v0.3.9"
 wget https://storage.googleapis.com/gh-af/genlayer-node/bin/amd64/${VERSION}/genlayer-node-linux-amd64-${VERSION}.tar.gz
 tar -xzvf genlayer-node-linux-amd64-${VERSION}.tar.gz
 cd genlayer-node-linux-amd64
